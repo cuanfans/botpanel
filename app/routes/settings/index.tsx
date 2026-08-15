@@ -44,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // Logika Sinkronisasi Data Nokos dengan Safety Check
+    // Perbaikan Total Logika Sinkronisasi Katalog
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,49 +54,46 @@ export const POST = createRoute(async (c) => {
 
             const nokos = new NokosService(config.config_value);
             
-            // Penarikan data dari Nokos
+            // Tarik data dari API Nokos
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
 
-            // Mencegah error 'map' jika entah mengapa data masih undefined
             if (!services || !countries) {
-                 return c.redirect(`/settings?error=Gagal+Sinkronisasi:+Respons+Katalog+Kosong`);
+                 return c.redirect('/settings?error=Gagal+Sinkronisasi:+Respons+Katalog+Kosong+dari+Provider');
             }
 
-            // Hapus data lama untuk refresh katalog
+            // Hapus data lama
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
 
-            // Insert Batch Negara - hanya memproses data jika berbentuk array
-            const countryStmts = [];
-            if(Array.isArray(countries)){
-                 for(const country of countries){
-                      countryStmts.push(db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)").bind(country.id, country.name, country.prefix || ''));
-                 }
-            }
-            
-            // Insert Batch Layanan
-            const serviceStmts = [];
-            if(Array.isArray(services)){
-                 for(const srv of services){
-                      serviceStmts.push(db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)").bind(srv.code, srv.name || srv.code));
-                 }
+            let countryCount = 0;
+            let serviceCount = 0;
+
+            // Masukkan data negara satu per satu secara aman
+            if (Array.isArray(countries)) {
+                for (const cty of countries) {
+                    if (cty.id !== undefined && cty.name) {
+                        await db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
+                          .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
+                          .run();
+                        countryCount++;
+                    }
+                }
             }
 
-            // Eksekusi Batch di D1
-            const chunkSize = 50;
-            if (countryStmts.length > 0) {
-                 for (let i = 0; i < countryStmts.length; i += chunkSize) {
-                     await db.batch(countryStmts.slice(i, i + chunkSize));
-                 }
-            }
-            if (serviceStmts.length > 0) {
-                 for (let i = 0; i < serviceStmts.length; i += chunkSize) {
-                     await db.batch(serviceStmts.slice(i, i + chunkSize));
-                 }
+            // Masukkan data layanan satu per satu secara aman
+            if (Array.isArray(services)) {
+                for (const srv of services) {
+                    if (srv.code && srv.name) {
+                        await db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)")
+                          .bind(String(srv.code), String(srv.name))
+                          .run();
+                        serviceCount++;
+                    }
+                }
             }
 
-            return c.redirect('/settings?success=Katalog+Produk+dan+Negara+Berhasil+Disinkronisasi!');
+            return c.redirect(`/settings?success=Sinkronisasi+Sukses!+(${serviceCount}+Layanan,+${countryCount}+Negara)`);
         } catch (error: any) {
             return c.redirect(`/settings?error=Gagal+Sinkronisasi:+${encodeURIComponent(error.message)}`);
         }
