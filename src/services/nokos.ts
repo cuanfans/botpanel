@@ -40,11 +40,8 @@ export class NokosService {
         return res.data?.balance || res.balance || 0;
     }
 
-    // Parser presisi tinggi sesuai struktur mentah Nokos
     async getServices(): Promise<{code: string, name: string}[]> {
         const res = await this.request('getServices');
-        
-        // Sesuai raw output: data.services adalah objek { "aa": {code: "aa", name: "Probo"}, ... }
         const rawServices = res.services || res.data || res;
 
         if (typeof rawServices === 'object' && rawServices !== null) {
@@ -53,11 +50,9 @@ export class NokosService {
                 name: String(val?.name || '')
             })).filter(i => i.code !== '');
         }
-
         return [];
     }
 
-    // Parser fleksibel untuk countries
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
         const res = await this.request('getCountries');
         const rawCountries = res.countries || res.data || res;
@@ -77,12 +72,16 @@ export class NokosService {
                 prefix: String(val?.prefix || '')
             })).filter(i => !isNaN(i.id));
         }
-
         return [];
     }
 
-    async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
-        const res = await this.request(`getPrices&service=${service}&country=${country}&server=${server}`);
+    // DIMODIFIKASI: Parameter dibuat opsional agar bisa menarik seluruh list harga
+    async getPrices(server: string = 's2', service: string = '', country: string = ''): Promise<any> {
+        let url = `getPrices&server=${server}`;
+        if (service) url += `&service=${service}`;
+        if (country) url += `&country=${country}`;
+        
+        const res = await this.request(url);
         return res.data || res;
     }
 
