@@ -1,7 +1,7 @@
-import type { Context } from 'hono'
+import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 
-export const POST = async (c: Context) => {
+export const POST = createRoute(async (c) => {
     const db = c.env.DB as D1Database
     const body = await c.req.parseBody()
     const action = body['action']
@@ -29,20 +29,18 @@ export const POST = async (c: Context) => {
     }
 
     return c.redirect('/markups')
-}
+})
 
-export default async function Markups(c: Context) {
+export default createRoute(async (c) => {
     const db = c.env.DB as D1Database
     
-    // Ambil Aturan Global
     const globals = await db.prepare("SELECT config_key, config_value FROM panel_configs WHERE config_key IN ('markup_global_percent', 'markup_global_flat')").all<{config_key: string, config_value: string}>()
     const globalPercent = globals.results?.find(g => g.config_key === 'markup_global_percent')?.config_value || '0'
     const globalFlat = globals.results?.find(g => g.config_key === 'markup_global_flat')?.config_value || '0'
 
-    // Ambil Aturan Khusus
     const rules = await db.prepare("SELECT * FROM markup_rules ORDER BY rule_type, target_id").all<{id: number, rule_type: string, target_id: string, markup_percent: number, markup_flat: number}>()
 
-    return (
+    return c.render(
         <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/markups" />
             
@@ -50,7 +48,6 @@ export default async function Markups(c: Context) {
                 <h1 class="text-3xl font-extrabold text-gray-800 mb-2">Harga & Margin Keuntungan</h1>
                 <p class="text-gray-500 mb-8">Atur keuntungan global, atau override margin untuk negara/layanan tertentu.</p>
                 
-                {/* GLOBAL MARKUP */}
                 <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8 flex items-end gap-4">
                     <input type="hidden" name="action" value="update_global" />
                     <div class="flex-1">
@@ -66,7 +63,6 @@ export default async function Markups(c: Context) {
                     </div>
                 </form>
 
-                {/* OVERRIDE MARKUP FORM */}
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Tambah Aturan Override</h2>
                 <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8 grid grid-cols-5 gap-4 items-end">
                     <input type="hidden" name="action" value="add" />
@@ -95,7 +91,6 @@ export default async function Markups(c: Context) {
                     </div>
                 </form>
 
-                {/* TABEL ATURAN KHUSUS */}
                 <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
                     <table class="w-full text-left border-collapse">
                         <thead>
@@ -134,4 +129,4 @@ export default async function Markups(c: Context) {
             </main>
         </div>
     )
-}
+})
