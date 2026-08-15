@@ -38,7 +38,12 @@ telegramRouter.post('/webhook', async (c) => {
 
     const botToken = configs['bot_token']
     const nokosApiKey = configs['nokos_api_key']
-    const qrisApiKey = configs['qris_api_key']
+    
+    // Pembersihan API Key QRIS secara otomatis dari spasi atau kata 'Bearer' ganda
+    const rawQrisKey = configs['qris_api_key'] || ''
+    const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
+    const globalQrisWebhook = (configs['qris_global_webhook'] || '').trim()
+    
     const exchangeRate = Number(configs['nokos_exchange_rate'] || 17900)
     
     if (!botToken) return c.text('OK')
@@ -71,31 +76,33 @@ telegramRouter.post('/webhook', async (c) => {
                 const amount = Number(nominal)
                 
                 if (!qrisApiKey) {
-                    await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay belum dikonfigurasi oleh Admin.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay kosong atau belum disetting admin.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
                     return c.text('OK')
                 }
 
                 await sendTelegramMessage(botToken, chatId, `⏳ Sedang membuat invoice QRIS untuk <b>Rp ${amount.toLocaleString('id-ID')}</b>...`, undefined, messageId)
 
-                // LOGIKA EKSEKUSI LANGSUNG (TANPA FETCH INTERNAL)
                 const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
                 
                 try {
-                    // Simpan status pending ke database
                     await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
                         .bind(orderId, String(chatId), amount).run()
 
-                    // Tembak API Eksternal Gateway QRIS
+                    // Menyiapkan Payload Dinamis
+                    const qrisPayload: any = {
+                        order_id: orderId,
+                        amount: amount
+                    }
+                    if (globalQrisWebhook) qrisPayload.webhook_url = globalQrisWebhook
+
                     const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
                         method: 'POST',
                         headers: {
                             'Authorization': `Bearer ${qrisApiKey}`,
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
                         },
-                        body: JSON.stringify({
-                            order_id: orderId,
-                            amount: amount
-                        })
+                        body: JSON.stringify(qrisPayload)
                     })
                     
                     const qrisRes = await qrisCall.json()
@@ -114,7 +121,6 @@ telegramRouter.post('/webhook', async (c) => {
                         }
                         await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
                     } else {
-                        // Batalkan di DB jika gateway menolak
                         await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
                         const errMsg = qrisRes.error || qrisRes.message || "Unauthorized, Token Missing"
                         await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b> ${errMsg}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
@@ -252,7 +258,7 @@ telegramRouter.post('/webhook', async (c) => {
         return c.text('OK')
     }
 
-    // --- Command: /depo <nominal> (Deposit Kustom MANUAL TEKS) ---
+    // --- Command: /depo <nominal> ---
     if (text.startsWith('/depo ')) {
         const amount = Number(text.split(' ')[1])
         if (isNaN(amount) || amount < 5000) {
@@ -271,13 +277,17 @@ telegramRouter.post('/webhook', async (c) => {
             await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
                 .bind(orderId, String(chatId), amount).run()
 
+            const qrisPayload: any = { order_id: orderId, amount: amount }
+            if (globalQrisWebhook) qrisPayload.webhook_url = globalQrisWebhook
+
             const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${qrisApiKey}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
                 },
-                body: JSON.stringify({ order_id: orderId, amount: amount })
+                body: JSON.stringify(qrisPayload)
             })
             
             const qrisRes = await qrisCall.json()
