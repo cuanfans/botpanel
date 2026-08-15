@@ -43,7 +43,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // MODE DEBUGGING: Menampilkan Raw Data mentah dari Nokos ke UI Panel
+    // AMAN DARI 502: Hanya tes fetch satu per satu secara ringan dan tampilkan mentah
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,23 +54,16 @@ export const POST = createRoute(async (c) => {
             const apiKey = config.config_value;
             const baseUrl = 'https://nokos.co.id/api/';
 
-            // Ambil raw text services
+            // Tes fetch getServices saja dulu agar tidak memicu timeout 502
             const resSrv = await fetch(`${baseUrl}?action=getServices`, {
                 headers: { 'X-API-Key': apiKey }
             });
-            const rawServices = await resSrv.text();
+            const rawText = await resSrv.text();
 
-            // Ambil raw text countries
-            const resCty = await fetch(`${baseUrl}?action=getCountries`, {
-                headers: { 'X-API-Key': apiKey }
-            });
-            const rawCountries = await resCty.text();
-
-            // Gabungkan dan tampilkan secara mentah di flash message panel
-            const debugOutput = `[SERVICES]: ${rawServices} || [COUNTRIES]: ${rawCountries}`;
-            return c.redirect(`/settings?success=${encodeURIComponent(debugOutput)}`);
+            // Render langsung teks mentahnya sebagai respons halaman agar tidak memicu redirect panjang
+            return c.html(`<!DOCTYPE html><html><head><title>Raw Debug</title><script src="https://cdn.tailwindcss.com"></script></head><p class="p-8 font-mono text-sm bg-gray-900 text-green-400 min-h-screen"><b>RAW SERVICES RESPONSE FROM NOKOS:</b><br><br>${rawText}<br><br><a href="/settings" class="text-blue-400 underline">Kembali ke Pengaturan</a></p></html>`);
         } catch (error: any) {
-            return c.redirect(`/settings?error=Gagal+Fetch+Raw:+${encodeURIComponent(error.message)}`);
+            return c.redirect(`/settings?error=Gagal+Fetch:+${encodeURIComponent(error.message)}`);
         }
     }
 
@@ -97,12 +90,12 @@ export default createRoute(async (c) => {
             <Sidebar activePath="/settings" />
             
             <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
-                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem (DEBUG MODE)</h1>
-                <p class="text-sm md:text-base text-gray-500 mb-8">Klik sinkronisasi untuk melihat struktur data mentah (raw data) dari Nokos.</p>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem (Safe Debug)</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-8">Uji coba aman untuk melihat teks mentah layanan Nokos tanpa 502 Bad Gateway.</p>
                 
                 {success && (
-                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-xs md:text-sm font-mono break-all max-h-60 overflow-y-auto">
-                        <p class="font-bold font-sans mb-1">RAW DATA DARI NOKOS:</p>
+                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-sm">
+                        <p class="font-bold">Info:</p>
                         <p>{success}</p>
                     </div>
                 )}
@@ -116,13 +109,13 @@ export default createRoute(async (c) => {
 
                 <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div>
-                        <h2 class="text-lg font-bold text-blue-900">Uji Coba Ambil Raw Data Nokos</h2>
+                        <h2 class="text-lg font-bold text-blue-900">Uji Coba Ambil Raw Services</h2>
                         <p class="text-sm text-blue-700 mt-1">Tersimpan lokal: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
                     </div>
                     <form method="POST">
                         <input type="hidden" name="action" value="sync_nokos" />
                         <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
-                            Tampilkan Raw Data
+                            Ambil Raw Services
                         </button>
                     </form>
                 </div>
