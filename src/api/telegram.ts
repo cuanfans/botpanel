@@ -67,7 +67,7 @@ telegramRouter.post('/webhook', async (c) => {
         const messageId = cb.message.message_id
         let data = cb.data
 
-        // SEGERA JAWAB CALLBACK AGAR TIDAK TIMEOUT (LOADING TERUS) DI HP USER!
+        // SEGERA JAWAB CALLBACK AGAR TIDAK TIMEOUT
         c.executionCtx.waitUntil(
             fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -100,12 +100,12 @@ telegramRouter.post('/webhook', async (c) => {
                 return c.text('OK')
             }
             
-            // 2. PROSES DEPOSIT
+            // 2. PROSES DEPOSIT (SUDAH MENDUKUNG MINIMAL 1000)
             else if (data.startsWith('depo_')) {
                 const nominal = data.split('_')[1]
                 
                 if (nominal === 'custom') {
-                    await sendTelegramMessage(botToken, chatId, `Silakan ketik nominal deposit Anda.\nFormat: <code>/depo 15000</code>`)
+                    await sendTelegramMessage(botToken, chatId, `Silakan ketik nominal deposit Anda.\nFormat: <code>/depo 1000</code>`)
                 } else {
                     const amount = Math.floor(Number(nominal))
                     
@@ -119,6 +119,7 @@ telegramRouter.post('/webhook', async (c) => {
                     const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
                     
                     try {
+                        // Penyisipan ke DB sekarang aman untuk nominal 1000 karena skema sudah diperbarui
                         await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`).bind(orderId, String(chatId), amount).run()
 
                         const qrisPayload: any = { order_id: orderId, amount: amount }
@@ -155,7 +156,7 @@ telegramRouter.post('/webhook', async (c) => {
                                                 `<b>Order ID:</b> <code>${orderId}</code>\n`+
                                                 `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
                                                 `📸 <b>Instruksi Pembayaran:</b>\n`+
-                                                `Silakan screenshot/simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
+                                                `Silakan screenshot atau simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
                                                 `⏳ Saldo otomatis masuk 1-2 detik setelah lunas.`;
 
                             const inline_keyboard = [];
@@ -509,8 +510,8 @@ telegramRouter.post('/webhook', async (c) => {
     // --- Command: /depo <nominal> ---
     if (text.startsWith('/depo ')) {
         const amount = Math.floor(Number(text.split(' ')[1]))
-        if (isNaN(amount) || amount < 5000) {
-            await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Minimal Rp 5.000.\nContoh: <code>/depo 15000</code>")
+        if (isNaN(amount) || amount < 1000 || amount > 499999) {
+            await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Minimal Rp 1.000 dan Maksimal Rp 499.999.\nContoh: <code>/depo 15000</code>")
             return c.text('OK')
         }
 
