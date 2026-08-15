@@ -12,5 +12,5 @@ bucket = "./public"
 # Binding Database D1
 [[d1_databases]]
 binding = "DB"
-database_name = "bot_panel_db"
-database_id = "MASUKKAN_DATABASE_ID_ANDA_DI_SINI"
+database_name = "botpanel"
+database_id = "6160bfaa-7b2a-4451-afc5-b5d9b8befdbf"
