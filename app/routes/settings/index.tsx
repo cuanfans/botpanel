@@ -35,9 +35,7 @@ export const POST = createRoute(async (c) => {
 
     if (action === 'update_configs') {
         for (const [key, value] of Object.entries(body)) {
-            // Memasukkan setiap key form (termasuk nokos_exchange_rate) ke database
             if (key !== 'action' && typeof value === 'string') {
-                // Gunakan UPSERT logic di SQLite (INSERT ON CONFLICT)
                 await db.prepare(`
                     INSERT INTO panel_configs (config_key, config_value) 
                     VALUES (?, ?) 
@@ -48,7 +46,52 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // SINKRONISASI LAYANAN DAN NEGARA 
+    // ==========================================
+    // TAMBAHAN BARU: SINKRONISASI COMMAND KE TELEGRAM
+    // ==========================================
+    if (action === 'sync_bot_commands') {
+        try {
+            const configsRaw = await db.prepare("SELECT config_key, config_value FROM panel_configs WHERE config_key IN ('bot_token', 'bot_commands')").all<{config_key: string, config_value: string}>();
+            const configs = configsRaw.results?.reduce((acc, curr) => {
+                acc[curr.config_key] = curr.config_value; return acc;
+            }, {} as Record<string, string>) || {};
+
+            const botToken = configs['bot_token'];
+            const botCommandsRaw = configs['bot_commands'];
+
+            if (!botToken) throw new Error("Bot Token belum dikonfigurasi.");
+            if (!botCommandsRaw) throw new Error("Command Bot (JSON) belum diisi.");
+
+            // Parse JSON dari database: {"/start": "...", "/deposit": "..."}
+            const commandsObj = JSON.parse(botCommandsRaw);
+            
+            // Ubah format menjadi Array Object yang diterima Telegram: [{"command": "start", "description": "..."}]
+            const telegramCommands = Object.keys(commandsObj).map(key => {
+                const command = key.replace('/', ''); // Telegram wajibkan tanpa garis miring
+                const description = String(commandsObj[key]).substring(0, 256); // Max deskripsi 256 karakter
+                return { command, description };
+            });
+
+            // Tembak API POST ke Telegram
+            const tgResponse = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ commands: telegramCommands })
+            });
+
+            const tgResult = await tgResponse.json();
+
+            if (!tgResult.ok) {
+                throw new Error(`Telegram API Error: ${tgResult.description}`);
+            }
+
+            return c.redirect(`/settings?success=Menu+Command+Autofill+Berhasil+Diterapkan+di+Bot+Telegram!`);
+        } catch (error: any) {
+            return c.redirect(`/settings?error=Gagal+Sync+Command:+${encodeURIComponent(error.message)}`);
+        }
+    }
+
+    // SINKRONISASI LAYANAN DAN NEGARA (NOKOS)
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -57,7 +100,6 @@ export const POST = createRoute(async (c) => {
             }
 
             const nokos = new NokosService(config.config_value);
-            
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
 
@@ -136,20 +178,39 @@ export default createRoute(async (c) => {
                     </div>
                 )}
 
-                <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div>
-                        <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
-                        <p class="text-sm text-blue-700 mt-1">
-                            Tarik data layanan dan negara terbaru dari API Nokos. <br/>
-                            Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.
-                        </p>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8">
+                    {/* Kotak Info Sinkronisasi Nokos */}
+                    <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 flex flex-col justify-between gap-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Provider Nokos</h2>
+                            <p class="text-sm text-blue-700 mt-1">
+                                Tarik data layanan dan negara terbaru dari API Nokos. <br/>
+                                Tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.
+                            </p>
+                        </div>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="sync_nokos" />
+                            <button type="submit" class="w-full bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
+                                Sinkronkan Nokos Sekarang
+                            </button>
+                        </form>
                     </div>
-                    <form method="POST">
-                        <input type="hidden" name="action" value="sync_nokos" />
-                        <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
-                            Sinkronkan Sekarang
-                        </button>
-                    </form>
+
+                    {/* TAMBAHAN BARU: Kotak Info Sinkronisasi Command Telegram */}
+                    <div class="bg-indigo-50 rounded-2xl shadow-sm border border-indigo-200 p-6 flex flex-col justify-between gap-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-indigo-900">Sinkronisasi Menu Bot Telegram</h2>
+                            <p class="text-sm text-indigo-700 mt-1">
+                                Perbarui daftar perintah (command autocomplete) di dalam bot Telegram agar sesuai dengan isi kolom <i>Command Bot (JSON)</i> di bawah.
+                            </p>
+                        </div>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="sync_bot_commands" />
+                            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
+                                Update Menu Bot
+                            </button>
+                        </form>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
@@ -164,7 +225,7 @@ export default createRoute(async (c) => {
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Command Bot (JSON)</label>
-                            <textarea name="bot_commands" rows={3} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none font-mono text-xs md:text-sm" required>{configs['bot_commands']?.value || ''}</textarea>
+                            <textarea name="bot_commands" rows={4} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none font-mono text-xs md:text-sm" required>{configs['bot_commands']?.value || ''}</textarea>
                         </div>
 
                         <div>
@@ -172,11 +233,10 @@ export default createRoute(async (c) => {
                             <input type="text" name="nokos_api_key" value={configs['nokos_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
-                        {/* TAMBAHAN BARU: INPUT EXCHANGE RATE (KURS) */}
                         <div class="bg-yellow-50 p-4 border border-yellow-200 rounded-xl">
                             <label class="block text-sm font-bold text-gray-700 mb-1">Kurs Mata Uang Nokos (Multiplier)</label>
-                            <p class="text-xs text-gray-500 mb-2">Harga <i>raw</i> dari API Nokos akan dikalikan dengan angka ini untuk mendapatkan harga Rupiah (IDR). Contoh: 17825.</p>
-                            <input type="number" step="0.01" name="nokos_exchange_rate" value={configs['nokos_exchange_rate']?.value || '17825'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
+                            <p class="text-xs text-gray-500 mb-2">Harga <i>raw</i> dari API Nokos akan dikalikan dengan angka ini untuk mendapatkan harga Rupiah (IDR). Contoh: 17900.</p>
+                            <input type="number" step="0.01" name="nokos_exchange_rate" value={configs['nokos_exchange_rate']?.value || '17900'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
