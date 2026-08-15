@@ -53,36 +53,61 @@ export class NokosService {
         return [];
     }
 
+    // PARSER NEGARA YANG KEBAL JSON ACAK
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
         const res = await this.request('getCountries');
-        const rawCountries = res.countries || res.data || res;
+        const rawCountries = res.countries || res.data?.countries || res.data || res;
+
+        let result: {id: number, name: string, prefix: string}[] = [];
 
         if (Array.isArray(rawCountries)) {
-            return rawCountries.map(item => ({
-                id: Number(item.id ?? item.country_id ?? 0),
-                name: String(item.name || item.country_name || ''),
-                prefix: String(item.prefix || '')
-            })).filter(i => !isNaN(i.id));
+            // Jika dikembalikan sebagai Array
+            result = rawCountries.map(item => ({
+                id: Number(item?.id ?? item?.country_id ?? 0),
+                name: String(item?.name ?? item?.country_name ?? ''),
+                prefix: String(item?.prefix ?? '')
+            }));
+        } else if (typeof rawCountries === 'object' && rawCountries !== null) {
+            const firstVal = Object.values(rawCountries)[0];
+            
+            if (typeof firstVal === 'string') {
+                // Jika formatnya: {"0": "Russia", "6": "Indonesia"}
+                result = Object.entries(rawCountries).map(([id, name]) => ({
+                    id: Number(id),
+                    name: String(name),
+                    prefix: ''
+                }));
+            } else {
+                // Jika formatnya: {"0": {"id": 0, "name": "Russia"}}
+                result = Object.values(rawCountries).map((val: any) => ({
+                    id: Number(val?.id ?? val?.country_id ?? 0),
+                    name: String(val?.name ?? val?.country_name ?? ''),
+                    prefix: String(val?.prefix ?? '')
+                }));
+            }
         }
 
-        if (typeof rawCountries === 'object' && rawCountries !== null) {
-            return Object.values(rawCountries).map((val: any) => ({
-                id: Number(val?.id ?? val?.country_id ?? 0),
-                name: String(val?.name || val?.country_name || ''),
-                prefix: String(val?.prefix || '')
-            })).filter(i => !isNaN(i.id));
-        }
-        return [];
+        return result.filter(i => i.name !== '' && !isNaN(i.id));
     }
 
-    // DIMODIFIKASI: Parameter dibuat opsional agar bisa menarik seluruh list harga
+    // PARSER HARGA YANG KEBAL JSON ACAK
     async getPrices(server: string = 's2', service: string = '', country: string = ''): Promise<any> {
         let url = `getPrices&server=${server}`;
         if (service) url += `&service=${service}`;
         if (country) url += `&country=${country}`;
         
         const res = await this.request(url);
-        return res.data || res;
+        const pricesData = res.prices || res.data?.prices || res.data || res;
+        
+        // Membersihkan root object agar HANYA mengembalikan object berisi Country ID (angka)
+        const cleanPrices: Record<string, any> = {};
+        for (const [key, value] of Object.entries(pricesData)) {
+            if (!isNaN(Number(key)) && typeof value === 'object' && value !== null) {
+                cleanPrices[key] = value;
+            }
+        }
+        
+        return cleanPrices;
     }
 
     async getNumber(service: string, country: string, server: string = 's2'): Promise<{ activation_id: number, phone: string, price: number }> {
