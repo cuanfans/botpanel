@@ -44,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // SINKRONISASI TOTAL & AMAN
+    // SINKRONISASI TOTAL & AMAN (VERSI FIX RAW DATA)
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,12 +54,12 @@ export const POST = createRoute(async (c) => {
 
             const nokos = new NokosService(config.config_value);
             
-            // 1. Tarik semua data dari Nokos (bisa butuh waktu beberapa detik)
+            // 1. Tarik semua data
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
             const prices = await nokos.getPrices('s2');
 
-            // 2. Kosongkan data lama (dari anak ke induk untuk menghindari bentrok)
+            // 2. Kosongkan data lama (dari anak ke induk)
             await db.prepare("DELETE FROM nokos_prices").run();
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
@@ -67,9 +67,9 @@ export const POST = createRoute(async (c) => {
             // 3. Masukkan Data Negara
             let countryCount = 0;
             const countryStatements = [];
-            const validCountries = new Set<number>(); // Track negara valid
+            const validCountries = new Set<number>();
             for (const cty of countries) {
-                if (cty.id !== undefined && cty.name) {
+                if (!isNaN(cty.id) && cty.name) {
                     countryStatements.push(
                         db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
                           .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
@@ -83,7 +83,7 @@ export const POST = createRoute(async (c) => {
             // 4. Masukkan Data Layanan
             let serviceCount = 0;
             const serviceStatements = [];
-            const validServices = new Set<string>(); // Track layanan valid
+            const validServices = new Set<string>();
             for (const srv of services) {
                 if (srv.code && srv.name) {
                     serviceStatements.push(
@@ -96,36 +96,37 @@ export const POST = createRoute(async (c) => {
             }
             if (serviceStatements.length > 0) await db.batch(serviceStatements);
 
-            // 5. Masukkan Data Harga dan Stok (Filter ketat untuk menghindari error Foreign Key)
+            // 5. Masukkan Data Harga dan Stok (Membaca format {"6": {"wa": {"cost": 0.09, "count": 100}}})
             let priceCount = 0;
             const priceStatements = [];
             
-            for (const [countryId, servicesObj] of Object.entries(prices)) {
-                const cid = Number(countryId);
-                // Hanya izinkan harga yang negaranya berhasil di-input
-                if (!validCountries.has(cid)) continue; 
+            if (typeof prices === 'object' && prices !== null) {
+                for (const [countryIdStr, servicesObj] of Object.entries(prices)) {
+                    const cid = Number(countryIdStr);
+                    // Cegah error Foreign Key jika ID Negara tidak dikenali
+                    if (!validCountries.has(cid)) continue; 
 
-                if (typeof servicesObj === 'object' && servicesObj !== null) {
-                    for (const [serviceCode, data] of Object.entries(servicesObj as any)) {
-                        // Hanya izinkan harga yang layanannya berhasil di-input
-                        if (!validServices.has(serviceCode)) continue; 
-                        
-                        // Ekstrak cost/price & count/stock dari object
-                        if (data && (data.cost !== undefined || data.price !== undefined)) {
-                            const cost = Number(data.cost ?? data.price ?? 0);
-                            const count = Number(data.count ?? data.stock ?? 0);
+                    if (typeof servicesObj === 'object' && servicesObj !== null) {
+                        for (const [serviceCode, data] of Object.entries(servicesObj as any)) {
+                            // Cegah error Foreign Key jika Kode Layanan tidak dikenali
+                            if (!validServices.has(serviceCode)) continue; 
                             
-                            priceStatements.push(
-                                db.prepare("INSERT INTO nokos_prices (country_id, service_code, server, price, stock) VALUES (?, ?, ?, ?, ?)")
-                                  .bind(cid, String(serviceCode), 's2', cost, count)
-                            );
-                            priceCount++;
+                            if (data && data.cost !== undefined) {
+                                const cost = Number(data.cost);
+                                const count = Number(data.count || 0);
+                                
+                                priceStatements.push(
+                                    db.prepare("INSERT INTO nokos_prices (country_id, service_code, server, price, stock) VALUES (?, ?, ?, ?, ?)")
+                                      .bind(cid, String(serviceCode), 's2', cost, count)
+                                );
+                                priceCount++;
+                            }
                         }
                     }
                 }
             }
 
-            // Eksekusi insert Harga secara chunked (maks 100 queries per batch D1)
+            // Eksekusi insert Harga (chunk 100 batch/transaksi agar D1 Cloudflare stabil)
             const chunkSize = 100;
             for (let i = 0; i < priceStatements.length; i += chunkSize) {
                 const chunk = priceStatements.slice(i, i + chunkSize);
