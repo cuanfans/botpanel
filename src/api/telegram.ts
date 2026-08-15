@@ -26,7 +26,6 @@ async function sendTelegramMessage(botToken: string, chatId: string | number, te
     }).catch(() => {}) 
 }
 
-// Helper Bendera Negara
 function getFlagEmoji(countryName: string): string {
     const flags: Record<string, string> = {
         'Indonesia': '🇮🇩', 'USA': '🇺🇸', 'United Kingdom': '🇬🇧', 'Philippines': '🇵🇭', 
@@ -38,6 +37,90 @@ function getFlagEmoji(countryName: string): string {
         if (countryName.toLowerCase().includes(key.toLowerCase())) return flag
     }
     return '🏳️'
+}
+
+// ==========================================
+// RENDERER MENU UTAMA
+// ==========================================
+async function showStartMenu(db: D1Database, botToken: string, chatId: string, username: string, promoChannel: string, contactCs: string, messageIdToEdit?: number) {
+    const userRecord = await db.prepare("SELECT balance FROM telegram_users WHERE telegram_id = ?").bind(chatId).first<{balance: number}>()
+    const statsRecord = await db.prepare("SELECT COUNT(*) as total FROM telegram_users").first<{total: number}>()
+    
+    const now = new Date()
+    const dateStr = now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+    const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+    const startText = `🤖 <b>BotPanel PRO</b>\n${dateStr} pukul ${timeStr} WIB\n\n` +
+                      `<b>User Info :</b>\n` +
+                      `┣ <b>ID :</b> <code>${chatId}</code>\n` +
+                      `┗ <b>Username :</b> ${username}\n\n` +
+                      `<b>Balance Info :</b>\n` +
+                      `┗ <b>Balance :</b> Rp ${(userRecord?.balance || 0).toLocaleString('id-ID')}\n\n` +
+                      `<b>Bot Stats :</b>\n` +
+                      `┗ <b>Total User :</b> ${statsRecord?.total || 1}\n\n` +
+                      `<b>Info Promo :</b>\n` +
+                      `┗ <b>Channel :</b> ${promoChannel}\n\n` +
+                      `<b>Shortcut :</b>\n` +
+                      `┗ /start - Mulai Bot`
+
+    const startKeyboard = {
+        inline_keyboard: [
+            [{ text: "📄 Cara Penggunaan", callback_data: "menu_help" }],
+            [
+                { text: "🛒 Order OTP", callback_data: "menu_order" },
+                { text: "💳 Deposit", callback_data: "menu_deposit" }
+            ],
+            [
+                { text: "🧾 Histori Order", callback_data: "menu_history_order" },
+                { text: "🧾 Histori Deposit", callback_data: "menu_history_deposit" }
+            ],
+            [
+                { text: "🎁 Referral", callback_data: "menu_referral" },
+                { text: "🎧 Contact CS", url: contactCs }
+            ],
+            [{ text: "📜 Syarat Ketentuan", callback_data: "menu_terms" }]
+        ]
+    }
+    await sendTelegramMessage(botToken, chatId, startText, startKeyboard, messageIdToEdit)
+}
+
+async function showDepositMenu(botToken: string, chatId: string, messageIdToEdit?: number) {
+    const textDeposit = `🧮 <b>PILIH NOMINAL DEPOSIT</b>\n\nSilakan pilih nominal deposit instan di bawah ini, atau gunakan Nominal Kustom:`
+    const keyboardDeposit = {
+        inline_keyboard: [
+            [
+                { text: "Rp 1.000", callback_data: "depo_1000" },
+                { text: "Rp 5.000", callback_data: "depo_5000" }
+            ],
+            [
+                { text: "Rp 10.000", callback_data: "depo_10000" },
+                { text: "Rp 25.000", callback_data: "depo_25000" }
+            ],
+            [
+                { text: "Rp 50.000", callback_data: "depo_50000" },
+                { text: "Rp 100.000", callback_data: "depo_100000" }
+            ],
+            [
+                { text: "🏷 Nominal Kustom", callback_data: "depo_custom" }
+            ],
+            [
+                { text: "🔙 Kembali", callback_data: "menu_start" }
+            ]
+        ]
+    }
+    await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit, messageIdToEdit)
+}
+
+async function showOrderMenu(botToken: string, chatId: string, messageIdToEdit?: number) {
+    const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
+    const srvKb = {
+        inline_keyboard: [
+            [{ text: "⚡ Server 1 (Express)", callback_data: "srv_s1_1" }],
+            [{ text: "💎 Server 2 (Premium)", callback_data: "srv_s2_1" }],
+            [{ text: "🔙 Kembali", callback_data: "menu_start" }]
+        ]
+    }
+    await sendTelegramMessage(botToken, chatId, srvText, srvKb, messageIdToEdit)
 }
 
 // Endpoint Utama Webhook Telegram
@@ -56,11 +139,11 @@ telegramRouter.post('/webhook', async (c) => {
     const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
     const globalQrisWebhook = (configs['qris_global_webhook'] || '').trim()
     
-    // AMBIL VARIABEL DINAMIS DARI DATABASE
     const qrisGatewayUrl = (configs['qris_gateway_url'] || 'https://qrispay.pages.dev/api/trx').trim()
     const promoChannel = (configs['promo_channel'] || '@InfoNokosMochi').trim()
+    const contactCs = (configs['contact_cs'] || 'https://t.me/CSAnda').trim()
+    const termsText = (configs['terms_conditions'] || 'Syarat dan ketentuan belum diatur.').trim()
     
-    // Deteksi URL Otomatis untuk Webhook QRIS
     const reqUrl = new URL(c.req.url)
     const autoWebhookUrl = `${reqUrl.origin}/api/qris/webhook`
     const finalWebhookUrl = globalQrisWebhook || autoWebhookUrl
@@ -74,68 +157,102 @@ telegramRouter.post('/webhook', async (c) => {
         const cb = body.callback_query
         const chatId = cb.message.chat.id
         const messageId = cb.message.message_id
+        const username = cb.from.username ? `@${cb.from.username}` : (cb.from.first_name || 'User')
         let data = cb.data
 
-        // SEGERA JAWAB CALLBACK AGAR TIDAK TIMEOUT
+        // Balas cepat agar tidak loading, berikan popup alert khusus jika menu referral
+        const isReferral = data === 'menu_referral';
         c.executionCtx.waitUntil(
             fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ callback_query_id: cb.id })
+                body: JSON.stringify({ 
+                    callback_query_id: cb.id,
+                    text: isReferral ? "Fitur Referral sedang dikembangkan. Mohon bersabar!" : undefined,
+                    show_alert: isReferral
+                })
             })
         )
 
+        if (isReferral) return c.text('OK');
+
         try {
-            // 1. MENU UTAMA & STATIC
+            // 1. MENU UTAMA, DEPOSIT & STATIC PAGES
             if (data === 'menu_start') {
-                body.message = cb.message; body.message.text = '/start'; body.message.from = cb.from;
+                await showStartMenu(c.env.DB, botToken, String(chatId), username, promoChannel, contactCs, messageId);
             }
             else if (data === 'menu_deposit') {
-                body.message = cb.message; body.message.text = '/deposit'; body.message.from = cb.from;
+                await showDepositMenu(botToken, String(chatId), messageId);
             }
             else if (data === 'menu_order') {
-                const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
-                const srvKb = {
-                    inline_keyboard: [
-                        [{ text: "⚡ Server 1 (Express)", callback_data: "srv_s1_1" }],
-                        [{ text: "💎 Server 2 (Premium)", callback_data: "srv_s2_1" }],
-                        [{ text: "🔙 Kembali", callback_data: "menu_start" }]
-                    ]
-                }
-                await sendTelegramMessage(botToken, chatId, srvText, srvKb, messageId)
-                return c.text('OK')
+                await showOrderMenu(botToken, String(chatId), messageId);
             }
-            else if (['menu_help', 'menu_history_order', 'menu_history_deposit', 'menu_referral', 'menu_terms'].includes(data)) {
-                await sendTelegramMessage(botToken, chatId, `Fitur <b>${data.replace('menu_', '')}</b> sedang dalam tahap penyempurnaan.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
-                return c.text('OK')
+            else if (data === 'menu_help') {
+                const helpText = `📄 <b>CARA PENGGUNAAN BOT</b>\n\n` +
+                                 `1. Lakukan pengisian saldo via menu <b>💳 Deposit</b>.\n` +
+                                 `2. Pilih menu <b>🛒 Order OTP</b>, lalu pilih Server dan Layanan.\n` +
+                                 `3. Pilih negara dan harga yang Anda inginkan.\n` +
+                                 `4. Nomor akan muncul. Gunakan nomor tersebut di aplikasi tujuan Anda.\n` +
+                                 `5. Ketik perintah <code>/otp [ID_Aktivasi]</code> (misal: <code>/otp 12345</code>) untuk mengecek kode SMS masuk.\n` +
+                                 `6. Saldo hanya terpotong jika SMS berhasil masuk.\n\n` +
+                                 `<i>Butuh bantuan lebih lanjut? Klik menu Contact CS.</i>`;
+                await sendTelegramMessage(botToken, chatId, helpText, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
+            }
+            else if (data === 'menu_terms') {
+                const termsMsg = `📜 <b>SYARAT & KETENTUAN</b>\n\n${termsText}`;
+                await sendTelegramMessage(botToken, chatId, termsMsg, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
+            }
+            // HISTORI ORDER
+            else if (data === 'menu_history_order') {
+                const txs = await c.env.DB.prepare("SELECT service_code, phone_number, final_price, status, created_at FROM transactions WHERE telegram_id = ? ORDER BY id DESC LIMIT 5").bind(String(chatId)).all<any>();
+                let text = `🧾 <b>5 HISTORI ORDER TERAKHIR</b>\n\n`;
+                if (!txs.results || txs.results.length === 0) {
+                    text += `<i>Belum ada histori order.</i>`;
+                } else {
+                    txs.results.forEach((tx, i) => {
+                        const icon = tx.status === 'success' ? '✅' : (tx.status === 'failed' || tx.status === 'refunded' ? '❌' : '⏳');
+                        text += `${i+1}. <b>${tx.service_code.toUpperCase()}</b> - <code>${tx.phone_number || 'N/A'}</code>\n` +
+                                `   Harga: Rp ${tx.final_price.toLocaleString('id-ID')} | Status: ${icon} ${tx.status}\n` +
+                                `   Waktu: ${new Date(tx.created_at).toLocaleString('id-ID')}\n\n`;
+                    });
+                }
+                await sendTelegramMessage(botToken, chatId, text, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
+            }
+            // HISTORI DEPOSIT
+            else if (data === 'menu_history_deposit') {
+                const depos = await c.env.DB.prepare("SELECT amount, status, created_at FROM deposits WHERE telegram_id = ? ORDER BY id DESC LIMIT 5").bind(String(chatId)).all<any>();
+                let text = `🧾 <b>5 HISTORI DEPOSIT TERAKHIR</b>\n\n`;
+                if (!depos.results || depos.results.length === 0) {
+                    text += `<i>Belum ada histori deposit.</i>`;
+                } else {
+                    depos.results.forEach((dep, i) => {
+                        const icon = dep.status === 'settlement' ? '✅' : (dep.status === 'failed' || dep.status === 'expired' ? '❌' : '⏳');
+                        text += `${i+1}. <b>Rp ${dep.amount.toLocaleString('id-ID')}</b>\n` +
+                                `   Status: ${icon} ${dep.status}\n` +
+                                `   Waktu: ${new Date(dep.created_at).toLocaleString('id-ID')}\n\n`;
+                    });
+                }
+                await sendTelegramMessage(botToken, chatId, text, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
             }
             
-            // 2. PROSES DEPOSIT
+            // 2. PROSES DEPOSIT 
             else if (data.startsWith('depo_')) {
                 const nominal = data.split('_')[1]
-                
                 if (nominal === 'custom') {
                     await sendTelegramMessage(botToken, chatId, `Silakan ketik nominal deposit Anda.\nFormat: <code>/depo 1000</code>`)
                 } else {
                     const amount = Math.floor(Number(nominal))
-                    
                     if (!qrisApiKey) {
-                        await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay kosong di pengaturan panel.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay kosong di pengaturan panel.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
                         return c.text('OK')
                     }
 
                     await sendTelegramMessage(botToken, chatId, `⏳ Sedang membuat invoice QRIS untuk <b>Rp ${amount.toLocaleString('id-ID')}</b>...`, undefined, messageId)
-
                     const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
                     
                     try {
                         await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`).bind(orderId, String(chatId), amount).run()
 
-                        const qrisPayload: any = { 
-                            order_id: orderId, 
-                            amount: amount,
-                            webhook_url: finalWebhookUrl 
-                        }
-
+                        const qrisPayload: any = { order_id: orderId, amount: amount, webhook_url: finalWebhookUrl }
                         const qrisCall = await fetch(qrisGatewayUrl, {
                             method: 'POST',
                             headers: {
@@ -158,7 +275,6 @@ telegramRouter.post('/webhook', async (c) => {
                         if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
                             const finalUrl = qrisRes.paylink || qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
                             const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
-                            
                             const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
 
                             await c.env.DB.prepare(`UPDATE deposits SET qris_url = ?, webhook_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', finalWebhookUrl, orderId).run()
@@ -172,26 +288,18 @@ telegramRouter.post('/webhook', async (c) => {
 
                             const inline_keyboard = [];
                             if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
-                            inline_keyboard.push([{ text: "🔙 Kembali", callback_data: "menu_start" }]);
+                            inline_keyboard.push([{ text: "🔙 Kembali", callback_data: "menu_deposit" }]);
                             const payBtn = { inline_keyboard };
 
                             if (qrImageUrl) {
                                 await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ chat_id: chatId, message_id: messageId })
                                 }).catch(() => {});
 
                                 await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({
-                                        chat_id: chatId,
-                                        photo: qrImageUrl,
-                                        caption: successText,
-                                        reply_markup: payBtn,
-                                        parse_mode: 'HTML'
-                                    })
+                                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ chat_id: chatId, photo: qrImageUrl, caption: successText, reply_markup: payBtn, parse_mode: 'HTML' })
                                 });
                             } else {
                                 await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
@@ -433,89 +541,45 @@ telegramRouter.post('/webhook', async (c) => {
 
     // --- Command: /start ---
     if (text === '/start') {
-        const userRecord = await c.env.DB.prepare("SELECT balance FROM telegram_users WHERE telegram_id = ?").bind(chatId).first<{balance: number}>()
-        const statsRecord = await c.env.DB.prepare("SELECT COUNT(*) as total FROM telegram_users").first<{total: number}>()
-        
-        const now = new Date()
-        const dateStr = now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
-        const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-
-        const startText = `🤖 <b>BotPanel PRO</b>\n${dateStr} pukul ${timeStr} WIB\n\n` +
-                          `<b>User Info :</b>\n` +
-                          `┣ <b>ID :</b> <code>${chatId}</code>\n` +
-                          `┗ <b>Username :</b> ${username}\n\n` +
-                          `<b>Balance Info :</b>\n` +
-                          `┗ <b>Balance :</b> Rp ${(userRecord?.balance || 0).toLocaleString('id-ID')}\n\n` +
-                          `<b>Bot Stats :</b>\n` +
-                          `┗ <b>Total User :</b> ${statsRecord?.total || 1}\n\n` +
-                          `<b>Info Promo :</b>\n` +
-                          `┗ <b>Channel :</b> ${promoChannel}\n\n` +
-                          `<b>Shortcut :</b>\n` +
-                          `┗ /start - Mulai Bot`
-
-        const startKeyboard = {
-            inline_keyboard: [
-                [{ text: "📄 Cara Penggunaan", callback_data: "menu_help" }],
-                [
-                    { text: "🛒 Order OTP", callback_data: "menu_order" },
-                    { text: "💳 Deposit", callback_data: "menu_deposit" }
-                ],
-                [
-                    { text: "🧾 Histori Order", callback_data: "menu_history_order" },
-                    { text: "🧾 Histori Deposit", callback_data: "menu_history_deposit" }
-                ],
-                [
-                    { text: "🎁 Referral", callback_data: "menu_referral" },
-                    { text: "🎧 Contact CS", url: "https://t.me/CSAnda" }
-                ],
-                [{ text: "📜 Syarat Ketentuan", callback_data: "menu_terms" }]
-            ]
-        }
-        await sendTelegramMessage(botToken, chatId, startText, startKeyboard)
-        return c.text('OK')
+        await showStartMenu(c.env.DB, botToken, chatId, username, promoChannel, contactCs);
+        return c.text('OK');
     }
 
     // --- Command: /deposit ---
     if (text === '/deposit') {
-        const textDeposit = `🧮 <b>PILIH NOMINAL DEPOSIT</b>\n\nSilakan pilih nominal deposit instan di bawah ini, atau gunakan Nominal Kustom:`
-        const keyboardDeposit = {
-            inline_keyboard: [
-                [
-                    { text: "Rp 1.000", callback_data: "depo_1000" },
-                    { text: "Rp 5.000", callback_data: "depo_5000" }
-                ],
-                [
-                    { text: "Rp 10.000", callback_data: "depo_10000" },
-                    { text: "Rp 25.000", callback_data: "depo_25000" }
-                ],
-                [
-                    { text: "Rp 50.000", callback_data: "depo_50000" },
-                    { text: "Rp 100.000", callback_data: "depo_100000" }
-                ],
-                [
-                    { text: "🏷 Nominal Kustom", callback_data: "depo_custom" }
-                ],
-                [
-                    { text: "🔙 Kembali", callback_data: "menu_start" }
-                ]
-            ]
-        }
-        await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit)
-        return c.text('OK')
+        await showDepositMenu(botToken, chatId);
+        return c.text('OK');
     }
 
     // --- Command: /order ---
     if (text === '/order') {
-        const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
-        const srvKb = {
-            inline_keyboard: [
-                [{ text: "⚡ Server 1 (Express)", callback_data: "srv_s1_1" }],
-                [{ text: "💎 Server 2 (Premium)", callback_data: "srv_s2_1" }],
-                [{ text: "🔙 Kembali", callback_data: "menu_start" }]
-            ]
+        await showOrderMenu(botToken, chatId);
+        return c.text('OK');
+    }
+
+    // --- Command: /otp <id> ---
+    if (text.startsWith('/otp ')) {
+        const actId = text.split(' ')[1];
+        if (!actId) return c.text('OK');
+        try {
+            const nokos = new NokosService(nokosApiKey);
+            const status = await nokos.getStatus(actId);
+            
+            let msg = ``;
+            if (status.status === 'STATUS_WAIT_CODE') {
+                msg = `⏳ Menunggu SMS masuk untuk ID <code>${actId}</code>...\n\nSilakan tunggu beberapa saat dan ketik <code>/otp ${actId}</code> kembali.`;
+            } else if (status.status === 'STATUS_OK') {
+                msg = `📩 <b>SMS MASUK!</b>\n\nKode/SMS: <code>${status.sms || status.code}</code>\n\nSisa saldo Anda telah disesuaikan.`;
+            } else if (status.status === 'STATUS_CANCEL') {
+                msg = `❌ Transaksi dibatalkan atau kadaluarsa. Jika saldo Anda terpotong, silakan hubungi admin.`;
+            } else {
+                msg = `Status Aktivasi: ${status.status}`;
+            }
+            await sendTelegramMessage(botToken, chatId, msg);
+        } catch (e: any) {
+            await sendTelegramMessage(botToken, chatId, `❌ Gagal cek status: ${e.message}`);
         }
-        await sendTelegramMessage(botToken, chatId, srvText, srvKb)
-        return c.text('OK')
+        return c.text('OK');
     }
 
     // --- Command: /depo <nominal> ---
@@ -574,7 +638,7 @@ telegramRouter.post('/webhook', async (c) => {
                                     `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
                                     `📸 <b>Instruksi Pembayaran:</b>\n`+
                                     `Silakan screenshot atau simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
-                                    `⏳ Saldo akan masuk otomatis 1-2 detik setelah lunas.`;
+                                    `⏳ Saldo otomatis masuk 1-2 detik setelah lunas.`;
 
                 const inline_keyboard = [];
                 if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
