@@ -245,8 +245,21 @@ export default createRoute(async (c) => {
                         </div>
 
                         <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">URL Gateway QRIS</label>
+                            <p class="text-xs text-gray-500 mb-2">{configs['qris_gateway_url']?.desc || 'Endpoint API untuk generate QRIS'}</p>
+                            <input type="url" name="qris_gateway_url" value={configs['qris_gateway_url']?.value || 'https://qrispay.pages.dev/api/trx'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
+                        </div>
+
+                        <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">QRIS Global Webhook</label>
                             <input type="url" name="qris_global_webhook" value={configs['qris_global_webhook']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" />
+                        </div>
+
+                        {/* FIELD BARU UNTUK CHANNEL PROMO TELEGRAM */}
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Channel Promo Telegram</label>
+                            <p class="text-xs text-gray-500 mb-2">{configs['promo_channel']?.desc || 'Username atau Link Channel Promo Telegram'}</p>
+                            <input type="text" name="promo_channel" value={configs['promo_channel']?.value || '@InfoNokosMochi'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
