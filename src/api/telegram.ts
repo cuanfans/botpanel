@@ -5,7 +5,7 @@ import { NokosService } from '../services/nokos'
 
 export const telegramRouter = new Hono<{ Bindings: { DB: D1Database } }>()
 
-// Helper kirim pesan Telegram interaktif
+// Helper kirim pesan Telegram
 async function sendTelegramMessage(botToken: string, chatId: string | number, text: string, replyMarkup?: any, messageIdToEdit?: number) {
     const url = messageIdToEdit 
         ? `https://api.telegram.org/bot${botToken}/editMessageText`
@@ -16,7 +16,6 @@ async function sendTelegramMessage(botToken: string, chatId: string | number, te
         text: text,
         parse_mode: 'HTML',
     }
-    
     if (messageIdToEdit) payload.message_id = messageIdToEdit
     if (replyMarkup) payload.reply_markup = replyMarkup
 
@@ -24,7 +23,7 @@ async function sendTelegramMessage(botToken: string, chatId: string | number, te
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    })
+    }).catch(() => {}) // Hindari crash jika telegram error
 }
 
 // Helper Bendera Negara
@@ -45,6 +44,7 @@ function getFlagEmoji(countryName: string): string {
 telegramRouter.post('/webhook', async (c) => {
     const body = await c.req.json()
     
+    // Ambil Configs
     const configsRaw = await c.env.DB.prepare("SELECT config_key, config_value FROM panel_configs").all<{config_key: string, config_value: string}>()
     const configs = configsRaw.results?.reduce((acc, curr) => {
         acc[curr.config_key] = curr.config_value; return acc
@@ -65,7 +65,15 @@ telegramRouter.post('/webhook', async (c) => {
         const cb = body.callback_query
         const chatId = cb.message.chat.id
         const messageId = cb.message.message_id
-        const data = cb.data
+        let data = cb.data
+
+        // SEGERA JAWAB CALLBACK AGAR TIDAK TIMEOUT (LOADING TERUS) DI HP USER!
+        c.executionCtx.waitUntil(
+            fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ callback_query_id: cb.id })
+            })
+        )
 
         try {
             // 1. MENU UTAMA & STATIC
@@ -76,12 +84,23 @@ telegramRouter.post('/webhook', async (c) => {
                 body.message = cb.message; body.message.text = '/deposit'; body.message.from = cb.from;
             }
             else if (data === 'menu_order') {
-                // Langsung arahkan ke Layanan Server 2 Halaman 1
-                data = 'srv_s2_1'
+                // Tampilkan Pilihan Server terlebih dahulu (Sesuai Screenshot)
+                const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
+                const srvKb = {
+                    inline_keyboard: [
+                        [{ text: "⚡ Server 1 (Express)", callback_data: "srv_s1_1" }],
+                        [{ text: "💎 Server 2 (Premium)", callback_data: "srv_s2_1" }],
+                        [{ text: "🔙 Kembali", callback_data: "menu_start" }]
+                    ]
+                }
+                await sendTelegramMessage(botToken, chatId, srvText, srvKb, messageId)
+                return c.text('OK')
             }
             else if (['menu_help', 'menu_history_order', 'menu_history_deposit', 'menu_referral', 'menu_terms'].includes(data)) {
-                await sendTelegramMessage(botToken, chatId, `Fitur <b>${data.replace('menu_', '')}</b> sedang dalam pengembangan.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                await sendTelegramMessage(botToken, chatId, `Fitur <b>${data.replace('menu_', '')}</b> sedang dalam tahap penyempurnaan.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                return c.text('OK')
             }
+            
             // 2. PROSES DEPOSIT
             else if (data.startsWith('depo_')) {
                 const nominal = data.split('_')[1]
@@ -89,7 +108,7 @@ telegramRouter.post('/webhook', async (c) => {
                 if (nominal === 'custom') {
                     await sendTelegramMessage(botToken, chatId, `Silakan ketik nominal deposit Anda.\nFormat: <code>/depo 15000</code>`)
                 } else {
-                    const amount = Math.floor(Number(nominal)) // Pastikan angka bulat
+                    const amount = Math.floor(Number(nominal))
                     
                     if (!qrisApiKey) {
                         await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay kosong di pengaturan panel.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
@@ -111,7 +130,8 @@ telegramRouter.post('/webhook', async (c) => {
                             headers: {
                                 'Authorization': `Bearer ${qrisApiKey}`,
                                 'Content-Type': 'application/json',
-                                'Accept': 'application/json'
+                                'Accept': 'application/json',
+                                'User-Agent': 'Cloudflare-Worker'
                             },
                             body: JSON.stringify(qrisPayload)
                         })
@@ -121,14 +141,15 @@ telegramRouter.post('/webhook', async (c) => {
                         try {
                             qrisRes = JSON.parse(rawQrisResponse)
                         } catch (e) {
-                            throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}): ${rawQrisResponse.substring(0, 100)}`)
+                            throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawQrisResponse.substring(0, 150)}</code>`)
                         }
 
-                        if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url)) {
+                        if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url)) {
+                            const finalUrl = qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
                             const successText = `✅ <b>INVOICE DIBUAT</b>\n\n<b>Order ID:</b> <code>${orderId}</code>\n<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\nSilakan klik tombol di bawah ini untuk membayar via QRIS. Saldo akan masuk otomatis 1-2 detik setelah lunas.`
                             const payBtn = {
                                 inline_keyboard: [
-                                    [{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || qrisRes.checkout_url }],
+                                    [{ text: "💳 Bayar Sekarang", url: finalUrl }],
                                     [{ text: "🔙 Kembali", callback_data: "menu_start" }]
                                 ]
                             }
@@ -136,51 +157,74 @@ telegramRouter.post('/webhook', async (c) => {
                         } else {
                             await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
                             const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
-                            await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b>\n<code>${errMsg}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                            await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b>\n<code>${errMsg}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
                         }
                     } catch (err: any) {
-                        await sendTelegramMessage(botToken, chatId, `❌ <b>Sistem Error:</b>\n<code>${err.message}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `❌ <b>Sistem Error:</b>\n<code>${err.message}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
                     }
                 }
             }
             
-            // 3. PAGINATION LAYANAN (SERVICES)
-            if (data.startsWith('srv_')) {
+            // 3. PAGINATION LAYANAN (Halaman 1 Khusus Aplikasi Populer)
+            else if (data.startsWith('srv_')) {
                 const parts = data.split('_')
                 const server = parts[1] || 's2'
                 const page = parseInt(parts[2] || '1')
                 const limit = 14
-                const offset = (page - 1) * limit
                 
                 const totalSrv = await c.env.DB.prepare("SELECT COUNT(*) as t FROM nokos_services").first<{t: number}>()
                 const maxPage = Math.ceil((totalSrv?.t || 0) / limit) || 1
                 
-                const srvs = await c.env.DB.prepare("SELECT code, name FROM nokos_services ORDER BY name LIMIT ? OFFSET ?").bind(limit, offset).all<{code: string, name: string}>()
+                let srvs = [];
+                // Hardcode List Populer untuk Halaman 1 sesuai screenshot
+                const popularCodes = ['wa', 'tg', 'ka', 'lf', 'fb', 'ig', 'go', 'amb', 'jg', 'ni', 'fr', 'xh', 'bha', 'xd', 'ot'];
+                
+                if (page === 1) {
+                    const placeholders = popularCodes.map(() => '?').join(',');
+                    srvs = await c.env.DB.prepare(`SELECT code, name FROM nokos_services WHERE code IN (${placeholders})`).bind(...popularCodes).all<{code: string, name: string}>();
+                    srvs = srvs.results || [];
+                    // Urutkan ulang sesuai urutan popularCodes
+                    srvs.sort((a, b) => popularCodes.indexOf(a.code) - popularCodes.indexOf(b.code));
+                } else {
+                    const offset = (page - 1) * limit
+                    const placeholders = popularCodes.map(() => '?').join(',');
+                    srvs = await c.env.DB.prepare(`SELECT code, name FROM nokos_services WHERE code NOT IN (${placeholders}) ORDER BY name LIMIT ? OFFSET ?`)
+                        .bind(...popularCodes, limit, offset).all<{code: string, name: string}>();
+                    srvs = srvs.results || [];
+                }
                 
                 const inline_keyboard = []
                 let row = []
-                for(let i = 0; i < (srvs.results?.length || 0); i++){
-                    const srv = srvs.results[i]
-                    row.push({ text: srv.name, callback_data: `sv_${server}_${srv.code}` })
+                for(let i = 0; i < srvs.length; i++){
+                    let name = srvs[i].name
+                    if(srvs[i].code === 'wa') name = 'WhatsApp'
+                    if(srvs[i].code === 'tg') name = 'Telegram'
+                    if(srvs[i].code === 'lf') name = 'TikTok'
+                    if(srvs[i].code === 'ka') name = 'Shopee'
+                    if(srvs[i].code === 'go') name = 'Google/Gmail/YT'
+                    if(srvs[i].code === 'ot') name = 'Any Other'
+                    
+                    row.push({ text: name, callback_data: `sv_${server}_${srvs[i].code}` })
                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
                 }
                 if(row.length > 0) inline_keyboard.push(row)
                 
                 const navRow = []
-                if(page > 1) navRow.push({ text: "◀️", callback_data: `srv_${server}_${page-1}` })
+                if(page > 1) navRow.push({ text: "◀️ Prev", callback_data: `srv_${server}_${page-1}` })
                 navRow.push({ text: `${page}/${maxPage}`, callback_data: "ignore" })
-                if(page < maxPage) navRow.push({ text: "▶️", callback_data: `srv_${server}_${page+1}` })
+                if(page < maxPage) navRow.push({ text: "Next ▶️", callback_data: `srv_${server}_${page+1}` })
                 if(navRow.length > 0) inline_keyboard.push(navRow)
                 
                 inline_keyboard.push([
-                    { text: "🔍 Search", callback_data: "search_srv" },
-                    { text: "🔙 Kembali", callback_data: "menu_start" }
+                    { text: "🔍 Cari Layanan (Ketik /cari)", callback_data: "ignore" },
+                    { text: "🔙 Kembali", callback_data: "menu_order" }
                 ])
                 
-                await sendTelegramMessage(botToken, chatId, `📚 <b>PILIH LAYANAN OTP</b>\n\n💻 Server : ${server === 's1' ? 'Server Express' : 'Server Plus'}\n\nSilakan pilih layanan:`, { inline_keyboard }, messageIdToEdit)
+                const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\n💻 <b>Server :</b> ${server === 's1' ? 'Server 1 (Express)' : 'Server 2 (Premium)'}\n\nNomor OTP Indonesia dan Internasional dengan kualitas premium dan stok melimpah.\n\n<i>Silakan pilih layanan:</i>`
+                await sendTelegramMessage(botToken, chatId, srvText, { inline_keyboard }, messageId)
             }
             
-            // 4. PAGINATION NEGARA (COUNTRIES)
+            // 4. PAGINATION NEGARA (Halaman 1 Khusus Negara Populer)
             else if (data.startsWith('sv_') || data.startsWith('cty_')) {
                 const parts = data.split('_')
                 const isCtyNav = parts[0] === 'cty'
@@ -188,7 +232,6 @@ telegramRouter.post('/webhook', async (c) => {
                 const serviceCode = parts[2]
                 const page = isCtyNav ? parseInt(parts[3]) : 1
                 const limit = 14
-                const offset = (page - 1) * limit
                 
                 const srvInfo = await c.env.DB.prepare("SELECT name FROM nokos_services WHERE code = ?").bind(serviceCode).first<{name: string}>()
                 const srvName = srvInfo?.name || serviceCode.toUpperCase()
@@ -196,32 +239,46 @@ telegramRouter.post('/webhook', async (c) => {
                 const totalCty = await c.env.DB.prepare("SELECT COUNT(*) as t FROM nokos_countries").first<{t: number}>()
                 const maxPage = Math.ceil((totalCty?.t || 0) / limit) || 1
                 
-                const ctys = await c.env.DB.prepare("SELECT id, name FROM nokos_countries ORDER BY name LIMIT ? OFFSET ?").bind(limit, offset).all<{id: number, name: string}>()
+                let ctys = [];
+                const popularCtyIds = [6, 22, 187, 16, 4, 73, 10, 7, 52, 3, 1, 5, 2, 19]; // ID sesuai screenshot
+
+                if (page === 1) {
+                    const placeholders = popularCtyIds.map(() => '?').join(',');
+                    ctys = await c.env.DB.prepare(`SELECT id, name FROM nokos_countries WHERE id IN (${placeholders})`).bind(...popularCtyIds).all<{id: number, name: string}>();
+                    ctys = ctys.results || [];
+                    ctys.sort((a, b) => popularCtyIds.indexOf(a.id) - popularCtyIds.indexOf(b.id));
+                } else {
+                    const offset = (page - 1) * limit
+                    const placeholders = popularCtyIds.map(() => '?').join(',');
+                    ctys = await c.env.DB.prepare(`SELECT id, name FROM nokos_countries WHERE id NOT IN (${placeholders}) ORDER BY name LIMIT ? OFFSET ?`)
+                        .bind(...popularCtyIds, limit, offset).all<{id: number, name: string}>();
+                    ctys = ctys.results || [];
+                }
                 
                 const inline_keyboard = []
                 let row = []
-                for(let i = 0; i < (ctys.results?.length || 0); i++){
-                    const cty = ctys.results[i]
+                for(let i = 0; i < ctys.length; i++){
+                    const cty = ctys[i]
                     row.push({ text: `${getFlagEmoji(cty.name)} ${cty.name}`, callback_data: `ct_${server}_${serviceCode}_${cty.id}` })
                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
                 }
                 if(row.length > 0) inline_keyboard.push(row)
                 
                 const navRow = []
-                if(page > 1) navRow.push({ text: "◀️", callback_data: `cty_${server}_${serviceCode}_${page-1}` })
+                if(page > 1) navRow.push({ text: "◀️ Prev", callback_data: `cty_${server}_${serviceCode}_${page-1}` })
                 navRow.push({ text: `${page}/${maxPage}`, callback_data: "ignore" })
-                if(page < maxPage) navRow.push({ text: "▶️", callback_data: `cty_${server}_${serviceCode}_${page+1}` })
+                if(page < maxPage) navRow.push({ text: "Next ▶️", callback_data: `cty_${server}_${serviceCode}_${page+1}` })
                 if(navRow.length > 0) inline_keyboard.push(navRow)
                 
                 inline_keyboard.push([
                     { text: "🔙 Kembali", callback_data: `srv_${server}_1` },
-                    { text: "🔍 Cari Negara", callback_data: "search_cty" }
                 ])
                 
-                await sendTelegramMessage(botToken, chatId, `✨ <b>PILIH NEGARA: ${srvName.toUpperCase()}</b> (Hal. ${page})\n\nMenampilkan negara yang memiliki stok ketersediaan:\n\n<i>Pilih negara tujuan Anda:</i>`, { inline_keyboard }, messageIdToEdit)
+                const ctyText = `✨ <b>PILIH NEGARA: ${srvName.toUpperCase()}</b> (Hal. ${page})\n\nMenampilkan ${totalCty?.t || 0} negara yang memiliki stok ketersediaan saat ini:\n\n<i>Pilih negara tujuan Anda:</i>`
+                await sendTelegramMessage(botToken, chatId, ctyText, { inline_keyboard }, messageId)
             }
 
-            // 5. CEK HARGA NOKOS
+            // 5. CEK HARGA NOKOS (Mendukung Multi-Operator)
             else if (data.startsWith('ct_')) {
                 const parts = data.split('_')
                 const server = parts[1]
@@ -231,7 +288,7 @@ telegramRouter.post('/webhook', async (c) => {
                 const srvInfo = await c.env.DB.prepare("SELECT name FROM nokos_services WHERE code = ?").bind(serviceCode).first<{name: string}>()
                 const srvName = srvInfo?.name || serviceCode.toUpperCase()
 
-                await sendTelegramMessage(botToken, chatId, `🔄 Mengambil data harga terkini dari provider...`, undefined, messageIdToEdit)
+                await sendTelegramMessage(botToken, chatId, `🔄 Mengambil data stok & harga dari server...`, undefined, messageId)
 
                 try {
                     const nokos = new NokosService(nokosApiKey)
@@ -241,14 +298,19 @@ telegramRouter.post('/webhook', async (c) => {
                     const serviceData = pricesObj[serviceCode]
 
                     if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
-                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${srvName}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageIdToEdit)
+                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${srvName}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                     } else {
-                        // Jika Nokos mengembalikan list harga (seperti di screenshot) atau single price
+                        // Handle struktur JSON bersarang dari provider Nokos (berdasarkan Operator atau Tier harga)
                         let priceOptions = []
-                        if (Array.isArray(serviceData)) {
-                            priceOptions = serviceData
+                        if (serviceData.cost !== undefined || serviceData.price !== undefined) {
+                            priceOptions.push(serviceData) // Single Price
                         } else {
-                            priceOptions = [serviceData]
+                            // Multiple Tiers/Operators seperti di screenshot 'negara-dipilih.png'
+                            for (const [op, optData] of Object.entries(serviceData)) {
+                                if ((optData as any).cost !== undefined || (optData as any).price !== undefined) {
+                                    priceOptions.push({ ...optData as any, operator: op })
+                                }
+                            }
                         }
 
                         const inline_keyboard = []
@@ -268,10 +330,10 @@ telegramRouter.post('/webhook', async (c) => {
 
                         inline_keyboard.push([{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }])
 
-                        await sendTelegramMessage(botToken, chatId, `✨ <b>LAYANAN TERPILIH: ${srvName.toUpperCase()}</b>\n\nBerikut adalah pilihan harga yang tersedia saat ini untuk negara yang Anda pilih:\n\n<i>Pilih harga yang menurut Anda paling stabil:</i>`, { inline_keyboard }, messageIdToEdit)
+                        await sendTelegramMessage(botToken, chatId, `✨ <b>LAYANAN TERPILIH: ${srvName.toUpperCase()}</b>\n\nBerikut adalah pilihan harga yang tersedia saat ini untuk negara yang Anda pilih:\n\n<i>Pilih harga yang menurut Anda paling stabil:</i>`, { inline_keyboard }, messageId)
                     }
                 } catch (e: any) {
-                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${e.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageIdToEdit)
+                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${e.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                 }
             }
 
@@ -286,12 +348,11 @@ telegramRouter.post('/webhook', async (c) => {
 
                 try {
                     await atomicPurchase(c.env.DB, String(chatId), expectedPrice, serviceCode, countryId, trxId)
-                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${serviceCode.toUpperCase()}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageIdToEdit)
+                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${serviceCode.toUpperCase()}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
 
                     const nokos = new NokosService(nokosApiKey)
                     const order = await nokos.getNumber(serviceCode, countryId, server)
 
-                    // Kalkulasi ulang margin untuk disimpan ke histori
                     const { markupApplied } = await calculateFinalPrice(c.env.DB, order.price, serviceCode, countryId)
 
                     await c.env.DB.prepare(`
@@ -300,27 +361,21 @@ telegramRouter.post('/webhook', async (c) => {
                         WHERE transaction_id = ?
                     `).bind(order.activation_id, order.phone, order.price, markupApplied, trxId).run()
 
-                    await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${order.phone}</code>\n🔖 ID Aktivasi: ${order.activation_id}\n\n<i>Ketik <code>/otp ${order.activation_id}</code> untuk mengecek SMS yang masuk.</i>`, undefined, messageIdToEdit)
+                    await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${order.phone}</code>\n🔖 ID Aktivasi: ${order.activation_id}\n\n<i>Ketik <code>/otp ${order.activation_id}</code> untuk mengecek SMS yang masuk.</i>`, undefined, messageId)
 
                 } catch (error: any) {
                     if (error.message !== "Saldo tidak mencukupi atau transaksi gagal") {
                         await c.env.DB.prepare(`UPDATE telegram_users SET balance = balance + (SELECT final_price FROM transactions WHERE transaction_id = ?) WHERE telegram_id = ?`).bind(trxId, String(chatId)).run() 
                         await c.env.DB.prepare(`UPDATE transactions SET status = 'failed' WHERE transaction_id = ?`).bind(trxId).run()
                     }
-                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${error.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct_${server}_${serviceCode}_${countryId}` }]] }, messageIdToEdit)
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${error.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct_${server}_${serviceCode}_${countryId}` }]] }, messageId)
                 }
             }
-
         } catch (err: any) {
             console.error(err)
-        } finally {
-            await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ callback_query_id: cb.id })
-            })
         }
         
-        if (!['menu_start', 'menu_deposit', 'menu_order'].includes(data)) return c.text('OK')
+        return c.text('OK')
     }
 
     // ==========================================
@@ -332,8 +387,6 @@ telegramRouter.post('/webhook', async (c) => {
     const chatId = message.chat.id.toString()
     const username = message.from.username ? `@${message.from.username}` : (message.from.first_name || 'User')
     const text = message.text.trim()
-    const isFromCallback = !!body.callback_query
-    const messageIdToEdit = isFromCallback ? message.message_id : undefined
 
     await c.env.DB.prepare(`
         INSERT INTO telegram_users (telegram_id, username, balance) 
@@ -381,7 +434,7 @@ telegramRouter.post('/webhook', async (c) => {
                 [{ text: "📜 Syarat Ketentuan", callback_data: "menu_terms" }]
             ]
         }
-        await sendTelegramMessage(botToken, chatId, startText, startKeyboard, messageIdToEdit)
+        await sendTelegramMessage(botToken, chatId, startText, startKeyboard)
         return c.text('OK')
     }
 
@@ -410,7 +463,21 @@ telegramRouter.post('/webhook', async (c) => {
                 ]
             ]
         }
-        await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit, messageIdToEdit)
+        await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit)
+        return c.text('OK')
+    }
+
+    // --- Command: /order ---
+    if (text === '/order') {
+        const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
+        const srvKb = {
+            inline_keyboard: [
+                [{ text: "⚡ Server 1 (Express)", callback_data: "srv_s1_1" }],
+                [{ text: "💎 Server 2 (Premium)", callback_data: "srv_s2_1" }],
+                [{ text: "🔙 Kembali", callback_data: "menu_start" }]
+            ]
+        }
+        await sendTelegramMessage(botToken, chatId, srvText, srvKb)
         return c.text('OK')
     }
 
@@ -441,7 +508,8 @@ telegramRouter.post('/webhook', async (c) => {
                 headers: {
                     'Authorization': `Bearer ${qrisApiKey}`,
                     'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+                    'Accept': 'application/json',
+                    'User-Agent': 'Cloudflare-Worker'
                 },
                 body: JSON.stringify(qrisPayload)
             })
@@ -451,15 +519,17 @@ telegramRouter.post('/webhook', async (c) => {
             try {
                 qrisRes = JSON.parse(rawResponse)
             } catch (e) {
-                 throw new Error(`Invalid Gateway Response: ${rawResponse.substring(0, 100)}`)
+                 throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawResponse.substring(0, 150)}</code>`)
             }
 
-            if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url)) {
-                const payBtn = { inline_keyboard: [[{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || qrisRes.checkout_url }]] }
+            if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url)) {
+                const finalUrl = qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
+                const payBtn = { inline_keyboard: [[{ text: "💳 Bayar Sekarang", url: finalUrl }]] }
                 await sendTelegramMessage(botToken, chatId, `✅ <b>INVOICE DIBUAT</b>\n\n<b>Order ID:</b> <code>${orderId}</code>\n<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\nKlik tombol di bawah untuk membayar.`, payBtn)
             } else {
                 await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
-                await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal dari Gateway:</b>\n<code>${qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)}</code>`)
+                const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
+                await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal dari Gateway:</b>\n<code>${errMsg}</code>`)
             }
         } catch (err: any) {
             await sendTelegramMessage(botToken, chatId, `❌ <b>Error:</b>\n<code>${err.message}</code>`)
