@@ -9,37 +9,37 @@ export default createRoute(async (c) => {
     ).all<{telegram_id: string, username: string, balance: number, created_at: string}>()
 
     return c.render(
-        <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
+        <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/users" />
             
-            <main class="flex-1 p-10 overflow-y-auto">
-                <h1 class="text-3xl font-extrabold text-gray-800 mb-2">Data Pengguna</h1>
-                <p class="text-gray-500 mb-8">Daftar pengguna bot beserta saldo akhir mereka yang dijamin konsisten oleh sistem D1 Atomic.</p>
+            <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Data Pengguna</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-6 md:mb-8">Daftar pengguna bot beserta saldo akhir mereka yang dijamin konsisten oleh sistem D1 Atomic.</p>
 
-                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                    <table class="w-full text-left border-collapse">
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto w-full">
+                    <table class="w-full text-left border-collapse min-w-[600px]">
                         <thead>
-                            <tr class="bg-gray-50 border-b border-gray-200 text-sm text-gray-500 uppercase tracking-wider">
-                                <th class="p-4 font-bold">Telegram ID</th>
-                                <th class="p-4 font-bold">Username</th>
-                                <th class="p-4 font-bold text-right">Total Saldo</th>
-                                <th class="p-4 font-bold">Terdaftar Pada</th>
+                            <tr class="bg-gray-50 border-b border-gray-200 text-xs md:text-sm text-gray-500 uppercase tracking-wider">
+                                <th class="p-3 md:p-4 font-bold">Telegram ID</th>
+                                <th class="p-3 md:p-4 font-bold">Username</th>
+                                <th class="p-3 md:p-4 font-bold text-right">Total Saldo</th>
+                                <th class="p-3 md:p-4 font-bold">Terdaftar Pada</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-100">
+                        <tbody class="divide-y divide-gray-100 text-sm">
                             {usersRaw.results?.map(user => (
                                 <tr class="hover:bg-gray-50">
-                                    <td class="p-4 font-mono text-sm text-gray-600">{user.telegram_id}</td>
-                                    <td class="p-4 font-semibold text-gray-800">@{user.username || 'unknown'}</td>
-                                    <td class="p-4 text-right font-bold text-green-600">
+                                    <td class="p-3 md:p-4 font-mono text-gray-600">{user.telegram_id}</td>
+                                    <td class="p-3 md:p-4 font-semibold text-gray-800">@{user.username || 'unknown'}</td>
+                                    <td class="p-3 md:p-4 text-right font-bold text-green-600">
                                         {new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }).format(user.balance)}
                                     </td>
-                                    <td class="p-4 text-sm text-gray-500">{new Date(user.created_at).toLocaleString('id-ID')}</td>
+                                    <td class="p-3 md:p-4 text-gray-500">{new Date(user.created_at).toLocaleString('id-ID')}</td>
                                 </tr>
                             ))}
                             {(!usersRaw.results || usersRaw.results.length === 0) && (
                                 <tr>
-                                    <td colSpan={4} class="p-8 text-center text-gray-400">Belum ada pengguna.</td>
+                                    <td colSpan={4} class="p-6 md:p-8 text-center text-gray-400 text-sm">Belum ada pengguna.</td>
                                 </tr>
                             )}
                         </tbody>
