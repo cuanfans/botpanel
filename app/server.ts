@@ -1,12 +1,12 @@
 import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
-import { apiRouter } from '../src/api/index'
+import { createApiRouter } from '../src/api/index'
 import { verifyToken } from '../src/utils/security'
 import { createApp } from 'honox/server'
 
-// 1. Inisialisasi Base App dan Middleware
 const baseApp = new Hono<{ Bindings: { DB: D1Database, JWT_SECRET: string }, Variables: { jwtPayload: any } }>()
 
+// Middleware Global Proteksi Autentikasi JWT (HS256) & Cookie
 baseApp.use('*', async (c, next) => {
     const path = c.req.path
     
@@ -22,7 +22,9 @@ baseApp.use('*', async (c, next) => {
         return await next()
     }
 
+    // Ambil token dari Cookie (untuk akses Panel Web SSR) atau Header (jika via curl API)
     let token = getCookie(c, 'admin_session')
+    
     if (!token) {
         const authHeader = c.req.header('Authorization')
         if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -30,12 +32,14 @@ baseApp.use('*', async (c, next) => {
         }
     }
 
+    // Blokir jika token tidak ditemukan
     if (!token) {
         if (path.startsWith('/api/')) return c.json({ success: false, error: 'Unauthorized, Token Missing' }, 401)
         return c.redirect('/login')
     }
 
     try {
+        // Verifikasi JWT (algoritma HS256)
         const decoded = await verifyToken(token, c.env.JWT_SECRET)
         c.set('jwtPayload', decoded)
         await next()
@@ -45,10 +49,10 @@ baseApp.use('*', async (c, next) => {
     }
 })
 
-// 2. Pasang API routes DI DALAM baseApp
-baseApp.route('/api', apiRouter)
+// 1. Mount API Backend dengan memanggil function pencipta router
+baseApp.route('/api', createApiRouter())
 
-// 3. Gabungkan baseApp ke dalam HonoX createApp (Solusi untuk mengatasi error Spread Syntax)
+// 2. Gabungkan baseApp ke dalam HonoX createApp
 const app = createApp({ app: baseApp })
 
 export default app
