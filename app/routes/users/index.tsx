@@ -1,15 +1,14 @@
-import type { Context } from 'hono'
+import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 
-export default async function Users(c: Context) {
+export default createRoute(async (c) => {
     const db = c.env.DB as D1Database
     
-    // Ambil data users diurutkan dari saldo terbanyak
     const usersRaw = await db.prepare(
         "SELECT telegram_id, username, balance, created_at FROM telegram_users ORDER BY balance DESC LIMIT 100"
     ).all<{telegram_id: string, username: string, balance: number, created_at: string}>()
 
-    return (
+    return c.render(
         <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/users" />
             
@@ -49,4 +48,4 @@ export default async function Users(c: Context) {
             </main>
         </div>
     )
-}
+})
