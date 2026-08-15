@@ -1,6 +1,7 @@
 import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 import { hashPassword } from '../../../src/utils/security'
+import { NokosService } from '../../../src/services/nokos'
 
 export const POST = createRoute(async (c) => {
     const db = c.env.DB as D1Database
@@ -43,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // AMAN DARI 502: Hanya tes fetch satu per satu secara ringan dan tampilkan mentah
+    // Sinkronisasi Sempurna ke Database D1
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -51,19 +52,38 @@ export const POST = createRoute(async (c) => {
                 return c.redirect('/settings?error=API+Key+Nokos+Belum+Disimpan');
             }
 
-            const apiKey = config.config_value;
-            const baseUrl = 'https://nokos.co.id/api/';
+            const nokos = new NokosService(config.config_value);
+            const services = await nokos.getServices();
+            const countries = await nokos.getCountries();
 
-            // Tes fetch getServices saja dulu agar tidak memicu timeout 502
-            const resSrv = await fetch(`${baseUrl}?action=getServices`, {
-                headers: { 'X-API-Key': apiKey }
-            });
-            const rawText = await resSrv.text();
+            // Hapus data lama
+            await db.prepare("DELETE FROM nokos_services").run();
+            await db.prepare("DELETE FROM nokos_countries").run();
 
-            // Render langsung teks mentahnya sebagai respons halaman agar tidak memicu redirect panjang
-            return c.html(`<!DOCTYPE html><html><head><title>Raw Debug</title><script src="https://cdn.tailwindcss.com"></script></head><p class="p-8 font-mono text-sm bg-gray-900 text-green-400 min-h-screen"><b>RAW SERVICES RESPONSE FROM NOKOS:</b><br><br>${rawText}<br><br><a href="/settings" class="text-blue-400 underline">Kembali ke Pengaturan</a></p></html>`);
+            let countryCount = 0;
+            let serviceCount = 0;
+
+            for (const cty of countries) {
+                if (cty.id && cty.name) {
+                    await db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
+                      .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
+                      .run();
+                    countryCount++;
+                }
+            }
+
+            for (const srv of services) {
+                if (srv.code && srv.name) {
+                    await db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)")
+                      .bind(String(srv.code), String(srv.name))
+                      .run();
+                    serviceCount++;
+                }
+            }
+
+            return c.redirect(`/settings?success=Sinkronisasi+Sukses!+(${serviceCount}+Layanan,+${countryCount}+Negara)`);
         } catch (error: any) {
-            return c.redirect(`/settings?error=Gagal+Fetch:+${encodeURIComponent(error.message)}`);
+            return c.redirect(`/settings?error=Gagal+Sinkronisasi:+${encodeURIComponent(error.message)}`);
         }
     }
 
@@ -90,12 +110,12 @@ export default createRoute(async (c) => {
             <Sidebar activePath="/settings" />
             
             <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
-                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem (Safe Debug)</h1>
-                <p class="text-sm md:text-base text-gray-500 mb-8">Uji coba aman untuk melihat teks mentah layanan Nokos tanpa 502 Bad Gateway.</p>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-8">Kelola token bot, API Key pembayaran, dan sinkronisasi.</p>
                 
                 {success && (
-                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-sm">
-                        <p class="font-bold">Info:</p>
+                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-sm md:text-base">
+                        <p class="font-bold">Berhasil!</p>
                         <p>{success}</p>
                     </div>
                 )}
@@ -109,13 +129,13 @@ export default createRoute(async (c) => {
 
                 <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div>
-                        <h2 class="text-lg font-bold text-blue-900">Uji Coba Ambil Raw Services</h2>
-                        <p class="text-sm text-blue-700 mt-1">Tersimpan lokal: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
+                        <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
+                        <p class="text-sm text-blue-700 mt-1">Tarik data layanan dan negara terbaru dari API Nokos. Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
                     </div>
                     <form method="POST">
                         <input type="hidden" name="action" value="sync_nokos" />
                         <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
-                            Ambil Raw Services
+                            Sinkronkan Sekarang
                         </button>
                     </form>
                 </div>
@@ -146,7 +166,12 @@ export default createRoute(async (c) => {
                         </div>
 
                         <div>
-                            <button type="submit" class="bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">QRIS Global Webhook</label>
+                            <input type="url" name="qris_global_webhook" value={configs['qris_global_webhook']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" />
+                        </div>
+
+                        <div>
+                            <button type="submit" class="bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl shadow-lg">
                                 Simpan Pengaturan
                             </button>
                         </div>
@@ -167,7 +192,12 @@ export default createRoute(async (c) => {
                         </div>
 
                         <div>
-                            <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Konfirmasi Password Baru</label>
+                            <input type="password" name="confirm_password" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
+                        </div>
+
+                        <div>
+                            <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl shadow-lg">
                                 Ubah Password
                             </button>
                         </div>
