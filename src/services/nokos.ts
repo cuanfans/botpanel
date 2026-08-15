@@ -13,7 +13,6 @@ export class NokosService {
         };
     }
 
-    // Mendapatkan saldo pusat (provider)[cite: 1]
     async getBalance(): Promise<number> {
         const response = await fetch(`${this.baseUrl}?action=getBalance`, {
             method: 'GET',
@@ -26,7 +25,32 @@ export class NokosService {
         throw new Error(data.error || "Gagal mendapatkan saldo Nokos");
     }
 
-    // Mendapatkan harga dari server Plus (s2) secara spesifik[cite: 1]
+    // BARU: Menarik seluruh katalog layanan
+    async getServices(): Promise<{code: string, name: string}[]> {
+        const response = await fetch(`${this.baseUrl}?action=getServices`, {
+            method: 'GET',
+            headers: this.getHeaders()
+        });
+        const data = await response.json();
+        if (data.success && data.data) {
+            return data.data;
+        }
+        throw new Error(data.error || "Gagal menarik daftar layanan");
+    }
+
+    // BARU: Menarik seluruh katalog negara
+    async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
+        const response = await fetch(`${this.baseUrl}?action=getCountries`, {
+            method: 'GET',
+            headers: this.getHeaders()
+        });
+        const data = await response.json();
+        if (data.success && data.data) {
+            return data.data;
+        }
+        throw new Error(data.error || "Gagal menarik daftar negara");
+    }
+
     async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
         const response = await fetch(`${this.baseUrl}?action=getPrices&service=${service}&country=${country}&server=${server}`, {
             method: 'GET',
@@ -39,7 +63,6 @@ export class NokosService {
         throw new Error(data.error || "Gagal mendapatkan harga");
     }
 
-    // Order nomor baru[cite: 1]
     async getNumber(service: string, country: string, server: string = 's2'): Promise<{ activation_id: number, phone: string, price: number }> {
         const body = new URLSearchParams();
         body.append('service', service);
@@ -57,11 +80,9 @@ export class NokosService {
             return data.data;
         }
         
-        // Handle Error 400 NO_NUMBERS dll[cite: 1]
         throw new Error(data.error || "Gagal memesan nomor");
     }
 
-    // Cek status SMS / OTP[cite: 1]
     async getStatus(activationId: string): Promise<{ status: string, code?: string, sms?: string }> {
         const response = await fetch(`${this.baseUrl}?action=getStatus&id=${activationId}`, {
             method: 'GET',
@@ -75,7 +96,6 @@ export class NokosService {
         throw new Error(data.error || "Gagal mengecek status");
     }
 
-    // Membatalkan pesanan (Refund)[cite: 1]
     async cancelActivation(activationId: string): Promise<boolean> {
         const body = new URLSearchParams();
         body.append('id', activationId);
