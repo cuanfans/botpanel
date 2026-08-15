@@ -1,13 +1,13 @@
 import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 import { hashPassword } from '../../../src/utils/security'
+import { NokosService } from '../../../src/services/nokos'
 
 export const POST = createRoute(async (c) => {
     const db = c.env.DB as D1Database
     const body = await c.req.parseBody()
     const action = body['action'] as string
 
-    // 1. Logika Ganti Password
     if (action === 'change_password') {
         const old_password = body['old_password'] as string
         const new_password = body['new_password'] as string
@@ -33,7 +33,6 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Password+admin+berhasil+diubah')
     }
 
-    // 2. Logika Update Konfigurasi Sistem
     if (action === 'update_configs') {
         for (const [key, value] of Object.entries(body)) {
             if (key !== 'action' && typeof value === 'string') {
@@ -43,6 +42,48 @@ export const POST = createRoute(async (c) => {
             }
         }
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
+    }
+
+    // BARU: Logika Sinkronisasi Data Nokos (Produk & Negara)
+    if (action === 'sync_nokos') {
+        try {
+            const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
+            if(!config || !config.config_value) {
+                return c.redirect('/settings?error=API+Key+Nokos+Belum+Disimpan');
+            }
+
+            const nokos = new NokosService(config.config_value);
+            const services = await nokos.getServices();
+            const countries = await nokos.getCountries();
+
+            // Hapus data lama untuk refresh katalog
+            await db.prepare("DELETE FROM nokos_services").run();
+            await db.prepare("DELETE FROM nokos_countries").run();
+
+            // Insert Batch Negara
+            const countryStmts = countries.map(country => 
+                db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)").bind(country.id, country.name, country.prefix)
+            );
+            
+            // Insert Batch Layanan
+            const serviceStmts = services.map(srv => 
+                db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)").bind(srv.code, srv.name)
+            );
+
+            // Eksekusi Batch di D1 (Max 100 queries per batch, jadi kita split secara dinamis jika perlu, 
+            // tapi HonoX Cloudflare D1 batching support up to 100 statements)
+            const chunkSize = 50;
+            for (let i = 0; i < countryStmts.length; i += chunkSize) {
+                await db.batch(countryStmts.slice(i, i + chunkSize));
+            }
+            for (let i = 0; i < serviceStmts.length; i += chunkSize) {
+                await db.batch(serviceStmts.slice(i, i + chunkSize));
+            }
+
+            return c.redirect('/settings?success=Katalog+Produk+dan+Negara+Berhasil+Disinkronisasi!');
+        } catch (error: any) {
+            return c.redirect(`/settings?error=Gagal+Sinkronisasi:+${encodeURIComponent(error.message)}`);
+        }
     }
 
     return c.redirect('/settings')
@@ -60,13 +101,17 @@ export default createRoute(async (c) => {
         return acc
     }, {} as Record<string, {value: string, desc: string}>) || {}
 
+    // Hitung jumlah katalog di database lokal
+    const totalServices = await db.prepare("SELECT COUNT(*) as total FROM nokos_services").first<{total: number}>();
+    const totalCountries = await db.prepare("SELECT COUNT(*) as total FROM nokos_countries").first<{total: number}>();
+
     return c.render(
         <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/settings" />
             
             <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
                 <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem</h1>
-                <p class="text-sm md:text-base text-gray-500 mb-8">Kelola token bot, API Key pembayaran, dan ganti password admin.</p>
+                <p class="text-sm md:text-base text-gray-500 mb-8">Kelola token bot, API Key pembayaran, dan sinkronisasi.</p>
                 
                 {success && (
                     <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-sm md:text-base">
@@ -82,8 +127,21 @@ export default createRoute(async (c) => {
                     </div>
                 )}
 
+                {/* BARU: Panel Sinkronisasi Nokos */}
+                <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
+                        <p class="text-sm text-blue-700 mt-1">Tarik data layanan dan negara terbaru dari API Nokos. Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
+                    </div>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="sync_nokos" />
+                        <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
+                            Sinkronkan Sekarang
+                        </button>
+                    </form>
+                </div>
+
                 <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
-                    {/* Form Konfigurasi Sistem */}
                     <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8 space-y-6">
                         <input type="hidden" name="action" value="update_configs" />
                         <h2 class="text-xl font-bold text-gray-800 border-b pb-2 mb-4">Integrasi API</h2>
@@ -129,7 +187,6 @@ export default createRoute(async (c) => {
                         </div>
                     </form>
 
-                    {/* Form Ganti Password */}
                     <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8 space-y-6 self-start">
                         <input type="hidden" name="action" value="change_password" />
                         <h2 class="text-xl font-bold text-gray-800 border-b pb-2 mb-4">Ganti Password Admin</h2>
