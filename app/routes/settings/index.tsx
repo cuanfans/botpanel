@@ -35,16 +35,20 @@ export const POST = createRoute(async (c) => {
 
     if (action === 'update_configs') {
         for (const [key, value] of Object.entries(body)) {
+            // Memasukkan setiap key form (termasuk nokos_exchange_rate) ke database
             if (key !== 'action' && typeof value === 'string') {
-                await db.prepare(
-                    "UPDATE panel_configs SET config_value = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = ?"
-                ).bind(value, key).run()
+                // Gunakan UPSERT logic di SQLite (INSERT ON CONFLICT)
+                await db.prepare(`
+                    INSERT INTO panel_configs (config_key, config_value) 
+                    VALUES (?, ?) 
+                    ON CONFLICT(config_key) DO UPDATE SET config_value = excluded.config_value, updated_at = CURRENT_TIMESTAMP
+                `).bind(key, value).run()
             }
         }
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // SINKRONISASI LAYANAN DAN NEGARA (TANPA HARGA - UNTUK LIVE CHECK NANTINYA)
+    // SINKRONISASI LAYANAN DAN NEGARA 
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,15 +58,12 @@ export const POST = createRoute(async (c) => {
 
             const nokos = new NokosService(config.config_value);
             
-            // Tarik data master
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
 
-            // Kosongkan data lama
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
 
-            // Masukkan Data Negara dengan db.batch
             let countryCount = 0;
             const countryStatements = [];
             for (const cty of countries) {
@@ -76,7 +77,6 @@ export const POST = createRoute(async (c) => {
             }
             if (countryStatements.length > 0) await db.batch(countryStatements);
 
-            // Masukkan Data Layanan dengan db.batch
             let serviceCount = 0;
             const serviceStatements = [];
             for (const srv of services) {
@@ -170,6 +170,13 @@ export default createRoute(async (c) => {
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Nokos API Key (Provider)</label>
                             <input type="text" name="nokos_api_key" value={configs['nokos_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
+                        </div>
+
+                        {/* TAMBAHAN BARU: INPUT EXCHANGE RATE (KURS) */}
+                        <div class="bg-yellow-50 p-4 border border-yellow-200 rounded-xl">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Kurs Mata Uang Nokos (Multiplier)</label>
+                            <p class="text-xs text-gray-500 mb-2">Harga <i>raw</i> dari API Nokos akan dikalikan dengan angka ini untuk mendapatkan harga Rupiah (IDR). Contoh: 17825.</p>
+                            <input type="number" step="0.01" name="nokos_exchange_rate" value={configs['nokos_exchange_rate']?.value || '17825'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
