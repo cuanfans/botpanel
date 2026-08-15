@@ -44,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // SINKRONISASI TOTAL & AMAN (VERSI FIX RAW DATA)
+    // SINKRONISASI LAYANAN DAN NEGARA (TANPA HARGA - UNTUK LIVE CHECK NANTINYA)
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,86 +54,43 @@ export const POST = createRoute(async (c) => {
 
             const nokos = new NokosService(config.config_value);
             
-            // 1. Tarik semua data
+            // Tarik data master
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
-            const prices = await nokos.getPrices('s2');
 
-            // 2. Kosongkan data lama (dari anak ke induk)
-            await db.prepare("DELETE FROM nokos_prices").run();
+            // Kosongkan data lama
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
 
-            // 3. Masukkan Data Negara
+            // Masukkan Data Negara dengan db.batch
             let countryCount = 0;
             const countryStatements = [];
-            const validCountries = new Set<number>();
             for (const cty of countries) {
                 if (!isNaN(cty.id) && cty.name) {
                     countryStatements.push(
                         db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
                           .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
                     );
-                    validCountries.add(Number(cty.id));
                     countryCount++;
                 }
             }
             if (countryStatements.length > 0) await db.batch(countryStatements);
 
-            // 4. Masukkan Data Layanan
+            // Masukkan Data Layanan dengan db.batch
             let serviceCount = 0;
             const serviceStatements = [];
-            const validServices = new Set<string>();
             for (const srv of services) {
                 if (srv.code && srv.name) {
                     serviceStatements.push(
                         db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)")
                           .bind(String(srv.code), String(srv.name))
                     );
-                    validServices.add(String(srv.code));
                     serviceCount++;
                 }
             }
             if (serviceStatements.length > 0) await db.batch(serviceStatements);
 
-            // 5. Masukkan Data Harga dan Stok (Membaca format {"6": {"wa": {"cost": 0.09, "count": 100}}})
-            let priceCount = 0;
-            const priceStatements = [];
-            
-            if (typeof prices === 'object' && prices !== null) {
-                for (const [countryIdStr, servicesObj] of Object.entries(prices)) {
-                    const cid = Number(countryIdStr);
-                    // Cegah error Foreign Key jika ID Negara tidak dikenali
-                    if (!validCountries.has(cid)) continue; 
-
-                    if (typeof servicesObj === 'object' && servicesObj !== null) {
-                        for (const [serviceCode, data] of Object.entries(servicesObj as any)) {
-                            // Cegah error Foreign Key jika Kode Layanan tidak dikenali
-                            if (!validServices.has(serviceCode)) continue; 
-                            
-                            if (data && data.cost !== undefined) {
-                                const cost = Number(data.cost);
-                                const count = Number(data.count || 0);
-                                
-                                priceStatements.push(
-                                    db.prepare("INSERT INTO nokos_prices (country_id, service_code, server, price, stock) VALUES (?, ?, ?, ?, ?)")
-                                      .bind(cid, String(serviceCode), 's2', cost, count)
-                                );
-                                priceCount++;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Eksekusi insert Harga (chunk 100 batch/transaksi agar D1 Cloudflare stabil)
-            const chunkSize = 100;
-            for (let i = 0; i < priceStatements.length; i += chunkSize) {
-                const chunk = priceStatements.slice(i, i + chunkSize);
-                await db.batch(chunk);
-            }
-
-            return c.redirect(`/settings?success=Sinkronisasi+Sukses!+(${serviceCount}+Layanan,+${countryCount}+Negara,+${priceCount}+Data+Harga)`);
+            return c.redirect(`/settings?success=Sinkronisasi+Sukses!+(${serviceCount}+Layanan+dan+${countryCount}+Negara)`);
         } catch (error: any) {
             return c.redirect(`/settings?error=Gagal+Sinkronisasi:+${encodeURIComponent(error.message)}`);
         }
@@ -156,7 +113,6 @@ export default createRoute(async (c) => {
 
     const totalServices = await db.prepare("SELECT COUNT(*) as total FROM nokos_services").first<{total: number}>();
     const totalCountries = await db.prepare("SELECT COUNT(*) as total FROM nokos_countries").first<{total: number}>();
-    const totalPrices = await db.prepare("SELECT COUNT(*) as total FROM nokos_prices").first<{total: number}>();
 
     return c.render(
         <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
@@ -184,8 +140,8 @@ export default createRoute(async (c) => {
                     <div>
                         <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
                         <p class="text-sm text-blue-700 mt-1">
-                            Tarik data layanan, negara, harga, dan stok terbaru dari API Nokos. <br/>
-                            Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b>, <b>{totalCountries?.total || 0} Negara</b>, dan <b>{totalPrices?.total || 0} Harga</b>.
+                            Tarik data layanan dan negara terbaru dari API Nokos. <br/>
+                            Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.
                         </p>
                     </div>
                     <form method="POST">
