@@ -56,6 +56,9 @@ telegramRouter.post('/webhook', async (c) => {
     const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
     const globalQrisWebhook = (configs['qris_global_webhook'] || '').trim()
     
+    // AMBIL URL GATEWAY DINAMIS DARI DATABASE
+    const qrisGatewayUrl = (configs['qris_gateway_url'] || 'https://qrispay.pages.dev/api/trx').trim()
+    
     // Deteksi URL Otomatis untuk Webhook QRIS
     const reqUrl = new URL(c.req.url)
     const autoWebhookUrl = `${reqUrl.origin}/api/qris/webhook`
@@ -126,14 +129,14 @@ telegramRouter.post('/webhook', async (c) => {
                     try {
                         await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`).bind(orderId, String(chatId), amount).run()
 
-                        // WEBHOOK OTOMATIS DISISIPKAN KE PAYLOAD
                         const qrisPayload: any = { 
                             order_id: orderId, 
                             amount: amount,
                             webhook_url: finalWebhookUrl 
                         }
 
-                        const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
+                        // MENGGUNAKAN URL GATEWAY DARI DATABASE
+                        const qrisCall = await fetch(qrisGatewayUrl, {
                             method: 'POST',
                             headers: {
                                 'Authorization': `Bearer ${qrisApiKey}`,
@@ -534,14 +537,14 @@ telegramRouter.post('/webhook', async (c) => {
             await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
                 .bind(orderId, String(chatId), amount).run()
 
-            // WEBHOOK OTOMATIS DISISIPKAN KE PAYLOAD
+            // MENGGUNAKAN URL GATEWAY DARI DATABASE
             const qrisPayload: any = { 
                 order_id: orderId, 
                 amount: amount,
                 webhook_url: finalWebhookUrl 
             }
 
-            const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
+            const qrisCall = await fetch(qrisGatewayUrl, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${qrisApiKey}`,
