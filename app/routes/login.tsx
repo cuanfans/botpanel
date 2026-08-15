@@ -1,7 +1,7 @@
-import type { Context } from 'hono'
+import { createRoute } from 'honox/factory'
 
-export default function Login(c: Context) {
-    return (
+export default createRoute((c) => {
+    return c.render(
         <div class="min-h-screen flex items-center justify-center bg-gray-100">
             <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-200">
                 <div class="text-center mb-8">
@@ -59,4 +59,4 @@ export default function Login(c: Context) {
             </div>
         </div>
     )
-}
+})
