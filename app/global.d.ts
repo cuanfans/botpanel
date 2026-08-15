@@ -12,9 +12,12 @@ declare module '@hono/react-renderer' {
 
 declare module 'hono' {
   interface Env {
-    Variables: {}
+    Variables: {
+      jwtPayload: any
+    }
     Bindings: {
       DB: D1Database
+      JWT_SECRET: string
     }
   }
 }
