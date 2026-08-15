@@ -1,7 +1,6 @@
 import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 import { hashPassword } from '../../../src/utils/security'
-import { NokosService } from '../../../src/services/nokos'
 
 export const POST = createRoute(async (c) => {
     const db = c.env.DB as D1Database
@@ -44,7 +43,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // Perbaikan Total Logika Sinkronisasi Katalog
+    // MODE DEBUGGING: Menampilkan Raw Data mentah dari Nokos ke UI Panel
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -52,50 +51,26 @@ export const POST = createRoute(async (c) => {
                 return c.redirect('/settings?error=API+Key+Nokos+Belum+Disimpan');
             }
 
-            const nokos = new NokosService(config.config_value);
-            
-            // Tarik data dari API Nokos
-            const services = await nokos.getServices();
-            const countries = await nokos.getCountries();
+            const apiKey = config.config_value;
+            const baseUrl = 'https://nokos.co.id/api/';
 
-            if (!services || !countries) {
-                 return c.redirect('/settings?error=Gagal+Sinkronisasi:+Respons+Katalog+Kosong+dari+Provider');
-            }
+            // Ambil raw text services
+            const resSrv = await fetch(`${baseUrl}?action=getServices`, {
+                headers: { 'X-API-Key': apiKey }
+            });
+            const rawServices = await resSrv.text();
 
-            // Hapus data lama
-            await db.prepare("DELETE FROM nokos_services").run();
-            await db.prepare("DELETE FROM nokos_countries").run();
+            // Ambil raw text countries
+            const resCty = await fetch(`${baseUrl}?action=getCountries`, {
+                headers: { 'X-API-Key': apiKey }
+            });
+            const rawCountries = await resCty.text();
 
-            let countryCount = 0;
-            let serviceCount = 0;
-
-            // Masukkan data negara satu per satu secara aman
-            if (Array.isArray(countries)) {
-                for (const cty of countries) {
-                    if (cty.id !== undefined && cty.name) {
-                        await db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
-                          .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
-                          .run();
-                        countryCount++;
-                    }
-                }
-            }
-
-            // Masukkan data layanan satu per satu secara aman
-            if (Array.isArray(services)) {
-                for (const srv of services) {
-                    if (srv.code && srv.name) {
-                        await db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)")
-                          .bind(String(srv.code), String(srv.name))
-                          .run();
-                        serviceCount++;
-                    }
-                }
-            }
-
-            return c.redirect(`/settings?success=Sinkronisasi+Sukses!+(${serviceCount}+Layanan,+${countryCount}+Negara)`);
+            // Gabungkan dan tampilkan secara mentah di flash message panel
+            const debugOutput = `[SERVICES]: ${rawServices} || [COUNTRIES]: ${rawCountries}`;
+            return c.redirect(`/settings?success=${encodeURIComponent(debugOutput)}`);
         } catch (error: any) {
-            return c.redirect(`/settings?error=Gagal+Sinkronisasi:+${encodeURIComponent(error.message)}`);
+            return c.redirect(`/settings?error=Gagal+Fetch+Raw:+${encodeURIComponent(error.message)}`);
         }
     }
 
@@ -122,12 +97,12 @@ export default createRoute(async (c) => {
             <Sidebar activePath="/settings" />
             
             <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
-                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem</h1>
-                <p class="text-sm md:text-base text-gray-500 mb-8">Kelola token bot, API Key pembayaran, dan sinkronisasi.</p>
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Pengaturan Sistem (DEBUG MODE)</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-8">Klik sinkronisasi untuk melihat struktur data mentah (raw data) dari Nokos.</p>
                 
                 {success && (
-                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-sm md:text-base">
-                        <p class="font-bold">Berhasil!</p>
+                    <div class="mb-6 p-4 bg-green-100 border-l-4 border-green-500 text-green-800 rounded text-xs md:text-sm font-mono break-all max-h-60 overflow-y-auto">
+                        <p class="font-bold font-sans mb-1">RAW DATA DARI NOKOS:</p>
                         <p>{success}</p>
                     </div>
                 )}
@@ -141,13 +116,13 @@ export default createRoute(async (c) => {
 
                 <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div>
-                        <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
-                        <p class="text-sm text-blue-700 mt-1">Tarik data layanan dan negara terbaru dari API Nokos. Saat ini tersimpan: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
+                        <h2 class="text-lg font-bold text-blue-900">Uji Coba Ambil Raw Data Nokos</h2>
+                        <p class="text-sm text-blue-700 mt-1">Tersimpan lokal: <b>{totalServices?.total || 0} Layanan</b> dan <b>{totalCountries?.total || 0} Negara</b>.</p>
                     </div>
                     <form method="POST">
                         <input type="hidden" name="action" value="sync_nokos" />
                         <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 px-6 rounded-xl shadow-md transition-transform hover:-translate-y-1">
-                            Sinkronkan Sekarang
+                            Tampilkan Raw Data
                         </button>
                     </form>
                 </div>
@@ -159,40 +134,26 @@ export default createRoute(async (c) => {
                         
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Telegram Bot Token</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['bot_token']?.desc}</p>
-                            <input type="text" name="bot_token" value={configs['bot_token']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
+                            <input type="text" name="bot_token" value={configs['bot_token']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Command Bot (JSON)</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['bot_commands']?.desc}</p>
-                            <textarea name="bot_commands" rows={3} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none font-mono text-xs md:text-sm" required>{configs['bot_commands']?.value || ''}</textarea>
+                            <textarea name="bot_commands" rows={3} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none font-mono text-xs md:text-sm" required>{configs['bot_commands']?.value || ''}</textarea>
                         </div>
-
-                        <hr class="border-gray-200" />
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Nokos API Key (Provider)</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['nokos_api_key']?.desc}</p>
-                            <input type="text" name="nokos_api_key" value={configs['nokos_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
+                            <input type="text" name="nokos_api_key" value={configs['nokos_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
-
-                        <hr class="border-gray-200" />
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Gopay API Key (QRIS Secret)</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['qris_api_key']?.desc}</p>
-                            <input type="text" name="qris_api_key" value={configs['qris_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
+                            <input type="text" name="qris_api_key" value={configs['qris_api_key']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
-                            <label class="block text-sm font-bold text-gray-700 mb-1">QRIS Global Webhook</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['qris_global_webhook']?.desc}</p>
-                            <input type="url" name="qris_global_webhook" value={configs['qris_global_webhook']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" />
-                        </div>
-
-                        <div class="pt-4">
-                            <button type="submit" class="w-full md:w-auto bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform hover:-translate-y-1">
+                            <button type="submit" class="bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl">
                                 Simpan Pengaturan
                             </button>
                         </div>
@@ -204,21 +165,16 @@ export default createRoute(async (c) => {
                         
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Password Lama</label>
-                            <input type="password" name="old_password" placeholder="Masukkan password saat ini" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
+                            <input type="password" name="old_password" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Password Baru</label>
-                            <input type="password" name="new_password" placeholder="Masukkan password baru" minLength={6} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
+                            <input type="password" name="new_password" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
-                            <label class="block text-sm font-bold text-gray-700 mb-1">Konfirmasi Password Baru</label>
-                            <input type="password" name="confirm_password" placeholder="Ulangi password baru" minLength={6} class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#1d8eed] outline-none text-sm md:text-base" required />
-                        </div>
-
-                        <div class="pt-4">
-                            <button type="submit" class="w-full md:w-auto bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl shadow-lg transition-transform hover:-translate-y-1">
+                            <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl">
                                 Ubah Password
                             </button>
                         </div>
