@@ -56,6 +56,11 @@ telegramRouter.post('/webhook', async (c) => {
     const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
     const globalQrisWebhook = (configs['qris_global_webhook'] || '').trim()
     
+    // Deteksi URL Otomatis untuk Webhook QRIS
+    const reqUrl = new URL(c.req.url)
+    const autoWebhookUrl = `${reqUrl.origin}/api/qris/webhook`
+    const finalWebhookUrl = globalQrisWebhook || autoWebhookUrl
+    
     if (!botToken) return c.text('OK')
 
     // ==========================================
@@ -100,7 +105,7 @@ telegramRouter.post('/webhook', async (c) => {
                 return c.text('OK')
             }
             
-            // 2. PROSES DEPOSIT (SUDAH MENDUKUNG MINIMAL 1000)
+            // 2. PROSES DEPOSIT
             else if (data.startsWith('depo_')) {
                 const nominal = data.split('_')[1]
                 
@@ -119,11 +124,14 @@ telegramRouter.post('/webhook', async (c) => {
                     const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
                     
                     try {
-                        // Penyisipan ke DB sekarang aman untuk nominal 1000 karena skema sudah diperbarui
                         await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`).bind(orderId, String(chatId), amount).run()
 
-                        const qrisPayload: any = { order_id: orderId, amount: amount }
-                        if (globalQrisWebhook) qrisPayload.webhook_url = globalQrisWebhook
+                        // WEBHOOK OTOMATIS DISISIPKAN KE PAYLOAD
+                        const qrisPayload: any = { 
+                            order_id: orderId, 
+                            amount: amount,
+                            webhook_url: finalWebhookUrl 
+                        }
 
                         const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
                             method: 'POST',
@@ -150,7 +158,7 @@ telegramRouter.post('/webhook', async (c) => {
                             
                             const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
 
-                            await c.env.DB.prepare(`UPDATE deposits SET qris_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', orderId).run()
+                            await c.env.DB.prepare(`UPDATE deposits SET qris_url = ?, webhook_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', finalWebhookUrl, orderId).run()
 
                             const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
                                                 `<b>Order ID:</b> <code>${orderId}</code>\n`+
@@ -526,8 +534,12 @@ telegramRouter.post('/webhook', async (c) => {
             await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
                 .bind(orderId, String(chatId), amount).run()
 
-            const qrisPayload: any = { order_id: orderId, amount: amount }
-            if (globalQrisWebhook) qrisPayload.webhook_url = globalQrisWebhook
+            // WEBHOOK OTOMATIS DISISIPKAN KE PAYLOAD
+            const qrisPayload: any = { 
+                order_id: orderId, 
+                amount: amount,
+                webhook_url: finalWebhookUrl 
+            }
 
             const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
                 method: 'POST',
@@ -553,7 +565,7 @@ telegramRouter.post('/webhook', async (c) => {
                 const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
                 
                 const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
-                await c.env.DB.prepare(`UPDATE deposits SET qris_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', orderId).run()
+                await c.env.DB.prepare(`UPDATE deposits SET qris_url = ?, webhook_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', finalWebhookUrl, orderId).run()
 
                 const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
                                     `<b>Order ID:</b> <code>${orderId}</code>\n`+
