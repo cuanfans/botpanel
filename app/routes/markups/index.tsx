@@ -38,7 +38,12 @@ export default createRoute(async (c) => {
     const globalPercent = globals.results?.find(g => g.config_key === 'markup_global_percent')?.config_value || '0'
     const globalFlat = globals.results?.find(g => g.config_key === 'markup_global_flat')?.config_value || '0'
 
+    // Ambil Rules
     const rules = await db.prepare("SELECT * FROM markup_rules ORDER BY rule_type, target_id").all<{id: number, rule_type: string, target_id: string, markup_percent: number, markup_flat: number}>()
+
+    // Ambil Data Katalog yang telah disinkronkan untuk Form Dropdown
+    const services = await db.prepare("SELECT * FROM nokos_services").all<{code: string, name: string}>()
+    const countries = await db.prepare("SELECT * FROM nokos_countries").all<{id: number, name: string, prefix: string}>()
 
     return c.render(
         <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
@@ -66,18 +71,30 @@ export default createRoute(async (c) => {
                 <h2 class="text-lg md:text-xl font-bold text-gray-800 mb-4">Tambah Aturan Override</h2>
                 <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 md:p-6 mb-8 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-start md:items-end">
                     <input type="hidden" name="action" value="add" />
+                    
                     <div class="sm:col-span-2 md:col-span-1">
                         <label class="block text-sm font-bold text-gray-700 mb-1">Tipe Aturan</label>
-                        <select name="rule_type" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-white">
-                            <option value="service">Per Layanan (cth: wa)</option>
-                            <option value="country">Per Negara (cth: 6)</option>
-                            <option value="unit">Unit (cth: 6_wa)</option>
+                        <select id="rule_type" name="rule_type" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-white">
+                            <option value="service">Per Layanan</option>
+                            <option value="country">Per Negara</option>
+                            <option value="unit">Produk Spesifik (Srv+Cty)</option>
                         </select>
                     </div>
-                    <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-1">Target ID</label>
-                        <input type="text" name="target_id" placeholder="wa / 6 / 6_wa" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
+
+                    <div class="sm:col-span-2 md:col-span-1 relative">
+                        <label class="block text-sm font-bold text-gray-700 mb-1">Pilih Target</label>
+                        <input type="hidden" id="target_id_hidden" name="target_id" required />
+                        
+                        {/* Selector Dinamis via JS Native */}
+                        <select id="selector_service" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-white">
+                            {services.results?.map(s => <option value={s.code}>{s.name} ({s.code})</option>)}
+                        </select>
+                        <select id="selector_country" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-white hidden">
+                            {countries.results?.map(c => <option value={c.id.toString()}>{c.name} ({c.id})</option>)}
+                        </select>
+                        <input type="text" id="selector_unit" placeholder="Cth: wa_6" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none hidden" />
                     </div>
+
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-1">Persen (%)</label>
                         <input type="number" step="0.01" name="markup_percent" defaultValue="0" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
@@ -87,7 +104,7 @@ export default createRoute(async (c) => {
                         <input type="number" name="markup_flat" defaultValue="0" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
                     </div>
                     <div class="sm:col-span-2 md:col-span-1 mt-2 md:mt-0">
-                        <button type="submit" class="w-full bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 rounded-lg">Tambah</button>
+                        <button type="submit" class="w-full bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 rounded-lg" onclick="setTargetId()">Tambah</button>
                     </div>
                 </form>
 
@@ -126,6 +143,30 @@ export default createRoute(async (c) => {
                         </tbody>
                     </table>
                 </div>
+
+                <script dangerouslySetInnerHTML={{__html: `
+                    const ruleType = document.getElementById('rule_type');
+                    const selSrv = document.getElementById('selector_service');
+                    const selCty = document.getElementById('selector_country');
+                    const selUnit = document.getElementById('selector_unit');
+                    const hiddenTarget = document.getElementById('target_id_hidden');
+
+                    ruleType.addEventListener('change', (e) => {
+                        selSrv.classList.add('hidden');
+                        selCty.classList.add('hidden');
+                        selUnit.classList.add('hidden');
+                        
+                        if(e.target.value === 'service') selSrv.classList.remove('hidden');
+                        else if(e.target.value === 'country') selCty.classList.remove('hidden');
+                        else selUnit.classList.remove('hidden');
+                    });
+
+                    function setTargetId() {
+                        if (ruleType.value === 'service') hiddenTarget.value = selSrv.value;
+                        else if (ruleType.value === 'country') hiddenTarget.value = selCty.value;
+                        else hiddenTarget.value = selUnit.value;
+                    }
+                `}} />
             </main>
         </div>
     )
