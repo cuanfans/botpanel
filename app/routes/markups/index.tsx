@@ -41,32 +41,32 @@ export default createRoute(async (c) => {
     const rules = await db.prepare("SELECT * FROM markup_rules ORDER BY rule_type, target_id").all<{id: number, rule_type: string, target_id: string, markup_percent: number, markup_flat: number}>()
 
     return c.render(
-        <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
+        <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/markups" />
             
-            <main class="flex-1 p-10 overflow-y-auto">
-                <h1 class="text-3xl font-extrabold text-gray-800 mb-2">Harga & Margin Keuntungan</h1>
-                <p class="text-gray-500 mb-8">Atur keuntungan global, atau override margin untuk negara/layanan tertentu.</p>
+            <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Harga & Margin Keuntungan</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-6 md:mb-8">Atur keuntungan global, atau override margin untuk negara/layanan tertentu.</p>
                 
-                <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8 flex items-end gap-4">
+                <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 md:p-6 mb-8 flex flex-col md:flex-row items-start md:items-end gap-4">
                     <input type="hidden" name="action" value="update_global" />
-                    <div class="flex-1">
+                    <div class="w-full md:flex-1">
                         <label class="block text-sm font-bold text-gray-700 mb-1">Global Persentase (%)</label>
                         <input type="number" step="0.01" name="global_percent" value={globalPercent} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
                     </div>
-                    <div class="flex-1">
+                    <div class="w-full md:flex-1">
                         <label class="block text-sm font-bold text-gray-700 mb-1">Global Flat (Rp)</label>
                         <input type="number" name="global_flat" value={globalFlat} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
                     </div>
-                    <div>
-                        <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-2 px-6 rounded-lg">Simpan Global</button>
+                    <div class="w-full md:w-auto mt-2 md:mt-0">
+                        <button type="submit" class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-2 px-6 rounded-lg">Simpan Global</button>
                     </div>
                 </form>
 
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Tambah Aturan Override</h2>
-                <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 mb-8 grid grid-cols-5 gap-4 items-end">
+                <h2 class="text-lg md:text-xl font-bold text-gray-800 mb-4">Tambah Aturan Override</h2>
+                <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 md:p-6 mb-8 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 items-start md:items-end">
                     <input type="hidden" name="action" value="add" />
-                    <div>
+                    <div class="sm:col-span-2 md:col-span-1">
                         <label class="block text-sm font-bold text-gray-700 mb-1">Tipe Aturan</label>
                         <select name="rule_type" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none bg-white">
                             <option value="service">Per Layanan (cth: wa)</option>
@@ -86,41 +86,41 @@ export default createRoute(async (c) => {
                         <label class="block text-sm font-bold text-gray-700 mb-1">Flat (Rp)</label>
                         <input type="number" name="markup_flat" defaultValue="0" class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none" required />
                     </div>
-                    <div>
+                    <div class="sm:col-span-2 md:col-span-1 mt-2 md:mt-0">
                         <button type="submit" class="w-full bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-2 rounded-lg">Tambah</button>
                     </div>
                 </form>
 
-                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-                    <table class="w-full text-left border-collapse">
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto w-full">
+                    <table class="w-full text-left border-collapse min-w-[600px]">
                         <thead>
-                            <tr class="bg-gray-50 border-b border-gray-200 text-sm text-gray-500 uppercase tracking-wider">
-                                <th class="p-4 font-bold">Tipe</th>
-                                <th class="p-4 font-bold">Target ID</th>
-                                <th class="p-4 font-bold">Margin (%)</th>
-                                <th class="p-4 font-bold">Margin Flat (Rp)</th>
-                                <th class="p-4 font-bold text-right">Aksi</th>
+                            <tr class="bg-gray-50 border-b border-gray-200 text-xs md:text-sm text-gray-500 uppercase tracking-wider">
+                                <th class="p-3 md:p-4 font-bold">Tipe</th>
+                                <th class="p-3 md:p-4 font-bold">Target ID</th>
+                                <th class="p-3 md:p-4 font-bold">Margin (%)</th>
+                                <th class="p-3 md:p-4 font-bold">Margin Flat (Rp)</th>
+                                <th class="p-3 md:p-4 font-bold text-right">Aksi</th>
                             </tr>
                         </thead>
-                        <tbody class="divide-y divide-gray-100">
+                        <tbody class="divide-y divide-gray-100 text-sm">
                             {rules.results?.map(rule => (
                                 <tr class="hover:bg-gray-50">
-                                    <td class="p-4 font-semibold text-gray-700 uppercase">{rule.rule_type}</td>
-                                    <td class="p-4 font-mono text-blue-600">{rule.target_id}</td>
-                                    <td class="p-4">{rule.markup_percent}%</td>
-                                    <td class="p-4">Rp {rule.markup_flat}</td>
-                                    <td class="p-4 text-right">
+                                    <td class="p-3 md:p-4 font-semibold text-gray-700 uppercase">{rule.rule_type}</td>
+                                    <td class="p-3 md:p-4 font-mono text-blue-600">{rule.target_id}</td>
+                                    <td class="p-3 md:p-4">{rule.markup_percent}%</td>
+                                    <td class="p-3 md:p-4">Rp {rule.markup_flat}</td>
+                                    <td class="p-3 md:p-4 text-right">
                                         <form method="POST" class="inline">
                                             <input type="hidden" name="action" value="delete" />
                                             <input type="hidden" name="id" value={rule.id.toString()} />
-                                            <button type="submit" class="text-red-500 hover:text-red-700 font-bold text-sm px-3 py-1 bg-red-50 rounded">Hapus</button>
+                                            <button type="submit" class="text-red-500 hover:text-red-700 font-bold text-xs md:text-sm px-3 py-1 bg-red-50 rounded">Hapus</button>
                                         </form>
                                     </td>
                                 </tr>
                             ))}
                             {(!rules.results || rules.results.length === 0) && (
                                 <tr>
-                                    <td colSpan={5} class="p-8 text-center text-gray-400">Belum ada aturan override spesifik. Sistem mengikuti Harga Global.</td>
+                                    <td colSpan={5} class="p-6 md:p-8 text-center text-gray-400 text-sm">Belum ada aturan override spesifik. Sistem mengikuti Harga Global.</td>
                                 </tr>
                             )}
                         </tbody>
