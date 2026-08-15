@@ -37,6 +37,10 @@ telegramRouter.post('/webhook', async (c) => {
     }, {} as Record<string, string>) || {}
 
     const botToken = configs['bot_token']
+    const nokosApiKey = configs['nokos_api_key']
+    const qrisApiKey = configs['qris_api_key']
+    const exchangeRate = Number(configs['nokos_exchange_rate'] || 17900)
+    
     if (!botToken) return c.text('OK')
 
     // ==========================================
@@ -55,7 +59,7 @@ telegramRouter.post('/webhook', async (c) => {
         }
         else if (data === 'menu_deposit') {
             body.message = cb.message
-            body.message.text = '/deposit' // Redirect ke logika command teks di bawah
+            body.message.text = '/deposit'
             body.message.from = cb.from
         }
         else if (data.startsWith('depo_')) {
@@ -66,44 +70,66 @@ telegramRouter.post('/webhook', async (c) => {
             } else {
                 const amount = Number(nominal)
                 
-                // Ubah status loading
+                if (!qrisApiKey) {
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay belum dikonfigurasi oleh Admin.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                    return c.text('OK')
+                }
+
                 await sendTelegramMessage(botToken, chatId, `⏳ Sedang membuat invoice QRIS untuk <b>Rp ${amount.toLocaleString('id-ID')}</b>...`, undefined, messageId)
 
-                // Panggil Endpoint Internal QRIS kita sendiri
-                const reqProtocol = new URL(c.req.url).origin
-                const qrisCall = await fetch(`${reqProtocol}/api/qris/create-invoice`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegram_id: String(chatId), amount: amount })
-                })
+                // LOGIKA EKSEKUSI LANGSUNG (TANPA FETCH INTERNAL)
+                const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
                 
-                const qrisRes = await qrisCall.json()
+                try {
+                    // Simpan status pending ke database
+                    await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
+                        .bind(orderId, String(chatId), amount).run()
 
-                if (qrisRes.success) {
-                    const successText = `✅ <b>INVOICE DIBUAT</b>\n\n` +
-                                        `<b>Order ID:</b> <code>${qrisRes.order_id}</code>\n` +
-                                        `<b>Nominal:</b> Rp ${qrisRes.amount.toLocaleString('id-ID')}\n\n` +
-                                        `Silakan klik tombol di bawah ini untuk membayar via QRIS/Gopay. Saldo akan masuk otomatis 1-2 detik setelah dibayar.`
+                    // Tembak API Eksternal Gateway QRIS
+                    const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${qrisApiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            order_id: orderId,
+                            amount: amount
+                        })
+                    })
                     
-                    const payBtn = {
-                        inline_keyboard: [
-                            [{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || "https://qrispay.pages.dev" }],
-                            [{ text: "🔙 Kembali", callback_data: "menu_start" }]
-                        ]
+                    const qrisRes = await qrisCall.json()
+
+                    if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url)) {
+                        const successText = `✅ <b>INVOICE DIBUAT</b>\n\n` +
+                                            `<b>Order ID:</b> <code>${orderId}</code>\n` +
+                                            `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n` +
+                                            `Silakan klik tombol di bawah ini untuk membayar via QRIS/Gopay. Saldo akan masuk otomatis 1-2 detik setelah lunas.`
+                        
+                        const payBtn = {
+                            inline_keyboard: [
+                                [{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || qrisRes.checkout_url }],
+                                [{ text: "🔙 Kembali", callback_data: "menu_start" }]
+                            ]
+                        }
+                        await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
+                    } else {
+                        // Batalkan di DB jika gateway menolak
+                        await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
+                        const errMsg = qrisRes.error || qrisRes.message || "Unauthorized, Token Missing"
+                        await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b> ${errMsg}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
                     }
-                    await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
-                } else {
-                    await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> ${qrisRes.error}\nSilakan coba lagi nanti.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+                } catch (err: any) {
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>Sistem Error:</b> ${err.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
                 }
             }
         }
         else if (data === 'menu_order') {
             body.message = cb.message
-            body.message.text = '/order' // Redirect ke logika command teks di bawah
+            body.message.text = '/order'
             body.message.from = cb.from
         }
 
-        // Hapus loading icon di tombol
         await fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -125,7 +151,6 @@ telegramRouter.post('/webhook', async (c) => {
     const isFromCallback = !!body.callback_query
     const messageIdToEdit = isFromCallback ? message.message_id : undefined
 
-    // Daftar/Update User
     await c.env.DB.prepare(`
         INSERT INTO telegram_users (telegram_id, username, balance) 
         VALUES (?, ?, 0) 
@@ -176,7 +201,7 @@ telegramRouter.post('/webhook', async (c) => {
         return c.text('OK')
     }
 
-    // --- Command: /deposit (DIPERBAIKI) ---
+    // --- Command: /deposit ---
     if (text === '/deposit') {
         const textDeposit = `🧮 <b>PILIH NOMINAL DEPOSIT</b>\n\nSilakan pilih nominal deposit instan di bawah ini, atau gunakan Nominal Kustom:`
         const keyboardDeposit = {
@@ -205,7 +230,7 @@ telegramRouter.post('/webhook', async (c) => {
         return c.text('OK')
     }
 
-    // --- Command: /order (DIPERBAIKI) ---
+    // --- Command: /order ---
     if (text === '/order') {
         const textOrder = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih layanan yang ingin Anda beli:`
         const keyboardOrder = {
@@ -227,34 +252,47 @@ telegramRouter.post('/webhook', async (c) => {
         return c.text('OK')
     }
 
-    // --- Command: /otp (DIPERBAIKI) ---
-    if (text.startsWith('/otp')) {
-        await sendTelegramMessage(botToken, chatId, `Fitur cek OTP sedang disiapkan.`)
-        return c.text('OK')
-    }
-
-    // --- Command: /depo <nominal> (Deposit Kustom) ---
+    // --- Command: /depo <nominal> (Deposit Kustom MANUAL TEKS) ---
     if (text.startsWith('/depo ')) {
         const amount = Number(text.split(' ')[1])
-        if (isNaN(amount)) {
-            await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Contoh: <code>/depo 15000</code>")
+        if (isNaN(amount) || amount < 5000) {
+            await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Minimal Rp 5.000.\nContoh: <code>/depo 15000</code>")
             return c.text('OK')
         }
 
-        const reqProtocol = new URL(c.req.url).origin
-        const qrisCall = await fetch(`${reqProtocol}/api/qris/create-invoice`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ telegram_id: chatId, amount: amount })
-        })
-        const qrisRes = await qrisCall.json()
-
-        if (qrisRes.success) {
-            const payBtn = { inline_keyboard: [[{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || "https://qrispay.pages.dev" }]] }
-            await sendTelegramMessage(botToken, chatId, `✅ <b>INVOICE DIBUAT</b>\nNominal: Rp ${qrisRes.amount.toLocaleString('id-ID')}\nKlik tombol untuk membayar.`, payBtn)
-        } else {
-            await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> ${qrisRes.error}`)
+        if (!qrisApiKey) {
+            await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay belum dikonfigurasi.`)
+            return c.text('OK')
         }
+
+        const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+        
+        try {
+            await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
+                .bind(orderId, String(chatId), amount).run()
+
+            const qrisCall = await fetch('https://qrispay.pages.dev/api/trx', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${qrisApiKey}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ order_id: orderId, amount: amount })
+            })
+            
+            const qrisRes = await qrisCall.json()
+
+            if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url)) {
+                const payBtn = { inline_keyboard: [[{ text: "💳 Bayar Sekarang", url: qrisRes.qris_url || qrisRes.checkout_url }]] }
+                await sendTelegramMessage(botToken, chatId, `✅ <b>INVOICE DIBUAT</b>\n\n<b>Order ID:</b> <code>${orderId}</code>\n<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\nKlik tombol di bawah untuk membayar.`, payBtn)
+            } else {
+                await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
+                await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal dari Gateway:</b> ${qrisRes.error || qrisRes.message || "Unauthorized"}`)
+            }
+        } catch (err: any) {
+            await sendTelegramMessage(botToken, chatId, `❌ <b>Error:</b> ${err.message}`)
+        }
+        
         return c.text('OK')
     }
 
@@ -272,7 +310,6 @@ telegramRouter.post('/webhook', async (c) => {
         try {
             const nokos = new NokosService(nokosApiKey)
             const providerData = await nokos.getPrices(serviceCode, countryCode, 's2')
-            const exchangeRate = Number(configs['nokos_exchange_rate'] || 17900)
             
             const pricesObj = providerData[countryCode] || providerData
             const serviceData = pricesObj[serviceCode]
