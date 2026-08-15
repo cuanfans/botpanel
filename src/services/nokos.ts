@@ -15,29 +15,24 @@ export class NokosService {
 
     private async request(action: string, options: RequestInit = {}): Promise<any> {
         const url = `${this.baseUrl}?action=${action}`;
+        const response = await fetch(url, {
+            ...options,
+            headers: this.getHeaders()
+        });
+
+        const text = await response.text();
+        let data;
         try {
-            const response = await fetch(url, {
-                ...options,
-                headers: this.getHeaders()
-            });
-
-            const text = await response.text();
-            
-            let data;
-            try {
-                data = JSON.parse(text);
-            } catch (e) {
-                throw new Error(`HTTP ${response.status} | Invalid JSON (Raw): ${text.substring(0, 150)}...`);
-            }
-
-            if (data && data.success === true) {
-                return data.data;
-            }
-
-            throw new Error(data?.error || `HTTP ${response.status} | Unknown JSON Error: ${text.substring(0, 150)}`);
-        } catch (err: any) {
-            throw new Error(err.message);
+            data = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`HTTP ${response.status} | Invalid JSON: ${text.substring(0, 100)}`);
         }
+
+        if (data && data.success === true) {
+            return data.data;
+        }
+
+        throw new Error(data?.error || `API Error on action: ${action}`);
     }
 
     async getBalance(): Promise<number> {
@@ -45,38 +40,45 @@ export class NokosService {
         return data.balance;
     }
 
-    // Modifikasi: Selalu kembalikan Array, apa pun format dari Nokos
+    // Penanganan fleksibel untuk getServices
     async getServices(): Promise<{code: string, name: string}[]> {
         const data = await this.request('getServices');
         
         if (Array.isArray(data)) {
-            return data;
-        } else if (typeof data === 'object' && data !== null) {
-            // Konversi dari { "wa": "WhatsApp" } menjadi array objects
-            return Object.entries(data).map(([code, name]) => ({
-                code: code,
-                name: String(name)
+            return data.map(item => ({
+                code: String(item.code || item.id || ''),
+                name: String(item.name || item.title || item.code || '')
+            })).filter(i => i.code !== '');
+        } 
+        
+        if (typeof data === 'object' && data !== null) {
+            return Object.entries(data).map(([key, val]: [string, any]) => ({
+                code: key,
+                name: typeof val === 'object' ? (val.name || key) : String(val)
             }));
         }
-        
+
         return [];
     }
 
-    // Modifikasi: Selalu kembalikan Array, apa pun format dari Nokos
+    // Penanganan fleksibel untuk getCountries
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
         const data = await this.request('getCountries');
         
         if (Array.isArray(data)) {
-            return data;
-        } else if (typeof data === 'object' && data !== null) {
-             // Konversi object map jika Nokos mengembalikannya dalam bentuk object
-             return Object.entries(data).map(([id, info]: [string, any]) => {
-                 if(typeof info === 'object') {
-                     return { id: parseInt(id), name: info.name || id, prefix: info.prefix || '' }
-                 } else {
-                     return { id: parseInt(id), name: String(info), prefix: '' }
-                 }
-             });
+            return data.map(item => ({
+                id: Number(item.id ?? item.country_id ?? 0),
+                name: String(item.name || item.country_name || ''),
+                prefix: String(item.prefix || item.code || '')
+            })).filter(i => !isNaN(i.id));
+        }
+
+        if (typeof data === 'object' && data !== null) {
+            return Object.entries(data).map(([key, val]: [string, any]) => ({
+                id: Number(val.id ?? key),
+                name: String(val.name || val || ''),
+                prefix: String(val.prefix || '')
+            })).filter(i => !isNaN(i.id));
         }
 
         return [];
@@ -103,16 +105,13 @@ export class NokosService {
     }
 
     async cancelActivation(activationId: string): Promise<boolean> {
-        const body = new URLSearchParams();
-        body.append('id', activationId);
-
         try {
             await this.request('cancelActivation', {
                 method: 'POST',
-                body: body.toString()
+                body: new URLSearchParams({ id: activationId }).toString()
             });
             return true;
-        } catch (error) {
+        } catch {
             return false;
         }
     }
