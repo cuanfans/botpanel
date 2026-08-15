@@ -1,12 +1,10 @@
-import type { Context } from 'hono'
+import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 
-// Handler POST untuk menyimpan pengaturan
-export const POST = async (c: Context) => {
+export const POST = createRoute(async (c) => {
     const db = c.env.DB as D1Database
     const body = await c.req.parseBody()
 
-    // Eksekusi update per kunci konfigurasi
     for (const [key, value] of Object.entries(body)) {
         if (typeof value === 'string') {
             await db.prepare(
@@ -15,24 +13,21 @@ export const POST = async (c: Context) => {
         }
     }
     
-    // Redirect kembali ke halaman dengan query parameter sukses
     return c.redirect('/settings?success=1')
-}
+})
 
-// Handler GET untuk menampilkan form SSR
-export default async function Settings(c: Context) {
+export default createRoute(async (c) => {
     const db = c.env.DB as D1Database
     const success = c.req.query('success')
     
     const configsRaw = await db.prepare("SELECT config_key, config_value, description FROM panel_configs").all<{config_key: string, config_value: string, description: string}>()
     
-    // Mapping array ke object untuk mempermudah render
     const configs = configsRaw.results?.reduce((acc, curr) => {
         acc[curr.config_key] = { value: curr.config_value, desc: curr.description }
         return acc
     }, {} as Record<string, {value: string, desc: string}>) || {}
 
-    return (
+    return c.render(
         <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/settings" />
             
@@ -91,4 +86,4 @@ export default async function Settings(c: Context) {
             </main>
         </div>
     )
-}
+})
