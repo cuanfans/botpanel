@@ -13,54 +13,53 @@ export class NokosService {
         };
     }
 
+    // Fungsi pusat untuk menangkap RAW response dan HTTP Status secara transparan
+    private async request(action: string, options: RequestInit = {}): Promise<any> {
+        const url = `${this.baseUrl}?action=${action}`;
+        try {
+            const response = await fetch(url, {
+                ...options,
+                headers: this.getHeaders()
+            });
+
+            // Ambil sebagai teks mentah terlebih dahulu untuk debugging
+            const text = await response.text();
+            
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                // Jika provider merespons dengan HTML (misal: 403 Forbidden atau 500 WAF Cloudflare)
+                throw new Error(`HTTP ${response.status} | Invalid JSON (Raw): ${text.substring(0, 150)}...`);
+            }
+
+            // Berdasarkan dokumentasi Nokos: Sukses
+            if (data && data.success === true) {
+                return data.data;
+            }
+
+            // Berdasarkan dokumentasi Nokos: Gagal namun masih berbentuk JSON
+            throw new Error(data?.error || `HTTP ${response.status} | Unknown JSON Error: ${text.substring(0, 150)}`);
+        } catch (err: any) {
+            throw new Error(err.message);
+        }
+    }
+
     async getBalance(): Promise<number> {
-        const response = await fetch(`${this.baseUrl}?action=getBalance`, {
-            method: 'GET',
-            headers: this.getHeaders()
-        });
-        const data = await response.json();
-        if (data.success && data.data) {
-            return data.data.balance;
-        }
-        throw new Error(data.error || "Gagal mendapatkan saldo Nokos");
+        const data = await this.request('getBalance');
+        return data.balance;
     }
 
-    // BARU: Menarik seluruh katalog layanan
     async getServices(): Promise<{code: string, name: string}[]> {
-        const response = await fetch(`${this.baseUrl}?action=getServices`, {
-            method: 'GET',
-            headers: this.getHeaders()
-        });
-        const data = await response.json();
-        if (data.success && data.data) {
-            return data.data;
-        }
-        throw new Error(data.error || "Gagal menarik daftar layanan");
+        return await this.request('getServices');
     }
 
-    // BARU: Menarik seluruh katalog negara
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
-        const response = await fetch(`${this.baseUrl}?action=getCountries`, {
-            method: 'GET',
-            headers: this.getHeaders()
-        });
-        const data = await response.json();
-        if (data.success && data.data) {
-            return data.data;
-        }
-        throw new Error(data.error || "Gagal menarik daftar negara");
+        return await this.request('getCountries');
     }
 
     async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
-        const response = await fetch(`${this.baseUrl}?action=getPrices&service=${service}&country=${country}&server=${server}`, {
-            method: 'GET',
-            headers: this.getHeaders()
-        });
-        const data = await response.json();
-        if (data.success) {
-            return data.data;
-        }
-        throw new Error(data.error || "Gagal mendapatkan harga");
+        return await this.request(`getPrices&service=${service}&country=${country}&server=${server}`);
     }
 
     async getNumber(service: string, country: string, server: string = 's2'): Promise<{ activation_id: number, phone: string, price: number }> {
@@ -69,44 +68,29 @@ export class NokosService {
         body.append('country', country);
         body.append('server', server);
 
-        const response = await fetch(`${this.baseUrl}?action=getNumber`, {
+        return await this.request('getNumber', {
             method: 'POST',
-            headers: this.getHeaders(),
             body: body.toString()
         });
-        
-        const data = await response.json();
-        if (data.success && data.data) {
-            return data.data;
-        }
-        
-        throw new Error(data.error || "Gagal memesan nomor");
     }
 
     async getStatus(activationId: string): Promise<{ status: string, code?: string, sms?: string }> {
-        const response = await fetch(`${this.baseUrl}?action=getStatus&id=${activationId}`, {
-            method: 'GET',
-            headers: this.getHeaders()
-        });
-        
-        const data = await response.json();
-        if (data.success && data.data) {
-            return data.data;
-        }
-        throw new Error(data.error || "Gagal mengecek status");
+        return await this.request(`getStatus&id=${activationId}`);
     }
 
     async cancelActivation(activationId: string): Promise<boolean> {
         const body = new URLSearchParams();
         body.append('id', activationId);
 
-        const response = await fetch(`${this.baseUrl}?action=cancelActivation`, {
-            method: 'POST',
-            headers: this.getHeaders(),
-            body: body.toString()
-        });
-
-        const data = await response.json();
-        return data.success === true;
+        try {
+            const data = await this.request('cancelActivation', {
+                method: 'POST',
+                body: body.toString()
+            });
+            // Jika request di atas tidak melempar error, berarti sukses
+            return true;
+        } catch (error) {
+            return false;
+        }
     }
 }
