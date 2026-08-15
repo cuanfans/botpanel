@@ -46,9 +46,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // ==========================================
-    // TAMBAHAN BARU: SINKRONISASI COMMAND KE TELEGRAM
-    // ==========================================
+    // SINKRONISASI COMMAND KE TELEGRAM
     if (action === 'sync_bot_commands') {
         try {
             const configsRaw = await db.prepare("SELECT config_key, config_value FROM panel_configs WHERE config_key IN ('bot_token', 'bot_commands')").all<{config_key: string, config_value: string}>();
@@ -62,17 +60,13 @@ export const POST = createRoute(async (c) => {
             if (!botToken) throw new Error("Bot Token belum dikonfigurasi.");
             if (!botCommandsRaw) throw new Error("Command Bot (JSON) belum diisi.");
 
-            // Parse JSON dari database: {"/start": "...", "/deposit": "..."}
             const commandsObj = JSON.parse(botCommandsRaw);
-            
-            // Ubah format menjadi Array Object yang diterima Telegram: [{"command": "start", "description": "..."}]
             const telegramCommands = Object.keys(commandsObj).map(key => {
-                const command = key.replace('/', ''); // Telegram wajibkan tanpa garis miring
-                const description = String(commandsObj[key]).substring(0, 256); // Max deskripsi 256 karakter
+                const command = key.replace('/', '');
+                const description = String(commandsObj[key]).substring(0, 256);
                 return { command, description };
             });
 
-            // Tembak API POST ke Telegram
             const tgResponse = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -179,7 +173,6 @@ export default createRoute(async (c) => {
                 )}
 
                 <div class="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8">
-                    {/* Kotak Info Sinkronisasi Nokos */}
                     <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 flex flex-col justify-between gap-4">
                         <div>
                             <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Provider Nokos</h2>
@@ -196,7 +189,6 @@ export default createRoute(async (c) => {
                         </form>
                     </div>
 
-                    {/* TAMBAHAN BARU: Kotak Info Sinkronisasi Command Telegram */}
                     <div class="bg-indigo-50 rounded-2xl shadow-sm border border-indigo-200 p-6 flex flex-col justify-between gap-4">
                         <div>
                             <h2 class="text-lg font-bold text-indigo-900">Sinkronisasi Menu Bot Telegram</h2>
@@ -216,7 +208,7 @@ export default createRoute(async (c) => {
                 <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
                     <form method="POST" class="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8 space-y-6">
                         <input type="hidden" name="action" value="update_configs" />
-                        <h2 class="text-xl font-bold text-gray-800 border-b pb-2 mb-4">Integrasi API</h2>
+                        <h2 class="text-xl font-bold text-gray-800 border-b pb-2 mb-4">Integrasi API & Bot</h2>
                         
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Telegram Bot Token</label>
@@ -246,7 +238,6 @@ export default createRoute(async (c) => {
 
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">URL Gateway QRIS</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['qris_gateway_url']?.desc || 'Endpoint API untuk generate QRIS'}</p>
                             <input type="url" name="qris_gateway_url" value={configs['qris_gateway_url']?.value || 'https://qrispay.pages.dev/api/trx'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
@@ -255,15 +246,29 @@ export default createRoute(async (c) => {
                             <input type="url" name="qris_global_webhook" value={configs['qris_global_webhook']?.value || ''} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" />
                         </div>
 
-                        {/* FIELD BARU UNTUK CHANNEL PROMO TELEGRAM */}
+                        <hr class="border-gray-200" />
+
+                        {/* KONFIGURASI TAMPILAN BOT */}
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Channel Promo Telegram</label>
-                            <p class="text-xs text-gray-500 mb-2">{configs['promo_channel']?.desc || 'Username atau Link Channel Promo Telegram'}</p>
+                            <p class="text-xs text-gray-500 mb-2">Ditampilkan di menu utama bot.</p>
                             <input type="text" name="promo_channel" value={configs['promo_channel']?.value || '@InfoNokosMochi'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
                         </div>
 
                         <div>
-                            <button type="submit" class="bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl shadow-lg">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Kontak CS (URL)</label>
+                            <p class="text-xs text-gray-500 mb-2">Tautan untuk tombol Contact CS (contoh: https://t.me/CSAnda).</p>
+                            <input type="url" name="contact_cs" value={configs['contact_cs']?.value || 'https://t.me/CSAnda'} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required />
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Syarat & Ketentuan</label>
+                            <p class="text-xs text-gray-500 mb-2">Teks yang muncul saat user menekan tombol Syarat Ketentuan.</p>
+                            <textarea name="terms_conditions" rows={4} class="w-full px-4 py-2 border border-gray-300 rounded-lg outline-none text-sm md:text-base" required>{configs['terms_conditions']?.value || '1. Saldo tidak dapat di-refund.'}</textarea>
+                        </div>
+
+                        <div class="pt-4">
+                            <button type="submit" class="bg-[#0d5fa3] hover:bg-[#1d8eed] text-white font-bold py-3 px-8 rounded-xl shadow-lg w-full md:w-auto">
                                 Simpan Pengaturan
                             </button>
                         </div>
@@ -289,7 +294,7 @@ export default createRoute(async (c) => {
                         </div>
 
                         <div>
-                            <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl shadow-lg">
+                            <button type="submit" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-8 rounded-xl shadow-lg w-full md:w-auto">
                                 Ubah Password
                             </button>
                         </div>
