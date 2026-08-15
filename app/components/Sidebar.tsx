@@ -3,6 +3,7 @@ import type { FC } from 'hono/jsx'
 export const Sidebar: FC<{ activePath: string }> = ({ activePath }) => {
     const menus = [
         { name: 'Dashboard', path: '/' },
+        { name: 'Katalog Produk', path: '/products' },
         { name: 'Pengaturan', path: '/settings' },
         { name: 'Harga & Margin', path: '/markups' },
         { name: 'Data User', path: '/users' },
