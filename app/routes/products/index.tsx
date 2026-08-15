@@ -11,6 +11,8 @@ export default createRoute(async (c) => {
 
     let error = ''
     let productList: { code: string, name: string, cost: number, stock: number, markup: number, finalPrice: number }[] = []
+    let markupPercent = 10
+    let markupFlat = 500
 
     try {
         // 1. Ambil Konfigurasi dari Database
@@ -21,10 +23,10 @@ export default createRoute(async (c) => {
         }, {} as Record<string, string>) || {}
 
         const apiKey = configs['nokos_api_key']
-        const markupPercent = Number(configs['markup_global_percent'] || 10)
-        const markupFlat = Number(configs['markup_global_flat'] || 500)
+        markupPercent = Number(configs['markup_global_percent'] || 10)
+        markupFlat = Number(configs['markup_global_flat'] || 500)
 
-        // 2. Ambil Master Data dari Database Lokal (yang sudah kita sinkronisasi sebelumnya)
+        // 2. Ambil Master Data dari Database Lokal
         const countriesDb = await db.prepare("SELECT id, name, prefix FROM nokos_countries ORDER BY name ASC").all<{id: number, name: string, prefix: string}>()
         const servicesDb = await db.prepare("SELECT code, name FROM nokos_services").all<{code: string, name: string}>()
         
@@ -32,44 +34,46 @@ export default createRoute(async (c) => {
         const serviceMap = new Map<string, string>()
         servicesDb.results?.forEach(s => serviceMap.set(s.code, s.name))
 
-        // 3. Tarik Harga dan Stok REAL-TIME dari API Nokos (hanya untuk negara yang dipilih)
+        // 3. Tarik Harga dan Stok REAL-TIME dari API Nokos
         if (apiKey) {
             const nokos = new NokosService(apiKey)
-            const rawPrices = await nokos.getPrices(currentServer, '', currentCountry)
             
-            // Raw data Nokos biasanya dibungkus dengan ID Negara, contoh: { "6": { "wa": {cost: 0.1, count: 100} } }
-            // Namun kita siapkan fallback jika struktur berubah
-            const pricesData = rawPrices[currentCountry] || rawPrices
+            try {
+                // Perbaikan parameter: (service, country, server)
+                const rawPrices = await nokos.getPrices('', currentCountry, currentServer)
+                const pricesData = rawPrices[currentCountry] || rawPrices
 
-            // 4. Kalkulasi Harga dan Gabungkan dengan Nama Database
-            if (typeof pricesData === 'object' && pricesData !== null) {
-                for (const [code, data] of Object.entries(pricesData as any)) {
-                    if (data && (data.cost !== undefined || data.price !== undefined)) {
-                        const providerCost = Number(data.cost ?? data.price ?? 0)
-                        const stock = Number(data.count ?? data.stock ?? 0)
-                        
-                        // Melewati layanan yang stoknya kosong
-                        if (stock <= 0) continue;
+                // 4. Kalkulasi Harga
+                if (typeof pricesData === 'object' && pricesData !== null) {
+                    for (const [code, data] of Object.entries(pricesData as any)) {
+                        if (data && (data.cost !== undefined || data.price !== undefined)) {
+                            const providerCost = Number(data.cost ?? data.price ?? 0)
+                            const stock = Number(data.count ?? data.stock ?? 0)
+                            
+                            // FILTER DIHAPUS: Semua data akan dimasukkan ke array, termasuk stok 0
 
-                        // Kalkulasi Harga Jual (Markup)
-                        // Rumus: (Harga Provider * Persen Markup) + Flat Markup
-                        const calculatedMarkup = (providerCost * (markupPercent / 100)) + markupFlat
-                        const finalPrice = providerCost + calculatedMarkup
+                            const calculatedMarkup = (providerCost * (markupPercent / 100)) + markupFlat
+                            const finalPrice = providerCost + calculatedMarkup
 
-                        productList.push({
-                            code: code,
-                            name: serviceMap.get(code) || code.toUpperCase(), // Ambil nama dari DB, jika tak ada pakai kode
-                            cost: providerCost,
-                            stock: stock,
-                            markup: calculatedMarkup,
-                            finalPrice: finalPrice
-                        })
+                            productList.push({
+                                code: code,
+                                name: serviceMap.get(code) || code.toUpperCase(),
+                                cost: providerCost,
+                                stock: stock,
+                                markup: calculatedMarkup,
+                                finalPrice: finalPrice
+                            })
+                        }
                     }
                 }
-            }
 
-            // Urutkan produk berdasarkan abjad nama layanan
-            productList.sort((a, b) => a.name.localeCompare(b.name))
+                // Urutkan produk berdasarkan abjad nama layanan
+                productList.sort((a, b) => a.name.localeCompare(b.name))
+
+            } catch (apiErr: any) {
+                // Tangkap pesan jika Nokos sedang down (contoh: 500 Internal Server Error di server s1)
+                error = `Gagal menarik data dari API Nokos: ${apiErr.message}`
+            }
 
         } else {
             error = "API Key Nokos belum diatur. Silakan atur di menu Pengaturan."
@@ -80,7 +84,6 @@ export default createRoute(async (c) => {
                 <Sidebar activePath="/products" />
                 
                 <main class="flex-1 flex flex-col h-screen overflow-hidden w-full">
-                    {/* Bagian Header & Filter (Tetap/Sticky) */}
                     <div class="p-6 md:px-10 md:pt-10 md:pb-6 bg-white border-b border-gray-200 z-10">
                         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                             <div>
@@ -88,7 +91,6 @@ export default createRoute(async (c) => {
                                 <p class="text-sm md:text-base text-gray-500 mt-1">Pantau harga modal, stok real-time, dan estimasi harga jual bot.</p>
                             </div>
                             
-                            {/* Form Filter Negara & Server */}
                             <form method="GET" class="flex flex-col sm:flex-row gap-3">
                                 <select name="country" class="px-4 py-2 bg-gray-50 border border-gray-300 rounded-xl outline-none text-sm md:text-base focus:ring-2 focus:ring-blue-500">
                                     {countriesDb.results?.map(cty => (
@@ -110,19 +112,18 @@ export default createRoute(async (c) => {
                         </div>
 
                         {error && (
-                            <div class="p-4 bg-red-100 border-l-4 border-red-500 text-red-800 rounded mb-2">
-                                <p class="font-bold">Gagal memuat data!</p>
+                            <div class="p-4 bg-red-100 border-l-4 border-red-500 text-red-800 rounded mb-4 shadow-sm text-sm">
+                                <p class="font-bold">Informasi Status Provider:</p>
                                 <p>{error}</p>
                             </div>
                         )}
 
                         <div class="flex items-center gap-4 text-sm text-gray-600 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                            <svg class="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                            <p>Menampilkan <b>{productList.length} layanan</b> yang sedang <b>tersedia (in-stock)</b> untuk negara ini. Aturan markup saat ini: <b>{markupPercent}% + Rp {markupFlat}</b>.</p>
+                            <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            <p>Menampilkan <b>{productList.length} layanan</b> untuk negara ini. Aturan markup saat ini: <b>{markupPercent}% + Rp {markupFlat}</b>.</p>
                         </div>
                     </div>
 
-                    {/* Bagian Tabel Data (Bisa di-scroll) */}
                     <div class="flex-1 overflow-auto p-6 md:px-10 bg-gray-50">
                         {productList.length > 0 ? (
                             <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
@@ -139,7 +140,7 @@ export default createRoute(async (c) => {
                                         </thead>
                                         <tbody class="text-sm md:text-base text-gray-800 divide-y divide-gray-100">
                                             {productList.map((product) => (
-                                                <tr class="hover:bg-blue-50 transition-colors">
+                                                <tr class={`transition-colors ${product.stock <= 0 ? 'bg-red-50 opacity-60' : 'hover:bg-blue-50'}`}>
                                                     <td class="p-4 font-semibold">{product.name}</td>
                                                     <td class="p-4 text-center">
                                                         <span class="bg-gray-200 text-gray-700 py-1 px-2 rounded font-mono text-xs">{product.code}</span>
@@ -150,8 +151,10 @@ export default createRoute(async (c) => {
                                                     <td class="p-4 text-center">
                                                         {product.stock > 1000 ? (
                                                             <span class="bg-green-100 text-green-800 py-1 px-2 rounded-full text-xs font-bold">1000+</span>
-                                                        ) : (
+                                                        ) : product.stock > 0 ? (
                                                             <span class="bg-orange-100 text-orange-800 py-1 px-2 rounded-full text-xs font-bold">{product.stock}</span>
+                                                        ) : (
+                                                            <span class="bg-red-100 text-red-800 py-1 px-2 rounded-full text-xs font-bold">Kosong</span>
                                                         )}
                                                     </td>
                                                     <td class="p-4 text-right font-bold text-[#0d5fa3]">
@@ -169,8 +172,8 @@ export default createRoute(async (c) => {
                                     <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gray-200 mb-4">
                                         <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
                                     </div>
-                                    <h2 class="text-lg font-bold text-gray-700">Stok Kosong / Tidak Tersedia</h2>
-                                    <p class="text-gray-500 mt-1">Saat ini tidak ada nomor yang tersedia untuk negara dan server ini di API Nokos.</p>
+                                    <h2 class="text-lg font-bold text-gray-700">Data Tidak Ditemukan</h2>
+                                    <p class="text-gray-500 mt-1">Nokos belum mengembalikan data harga untuk negara dan server ini.</p>
                                 </div>
                             )
                         )}
@@ -179,6 +182,17 @@ export default createRoute(async (c) => {
             </div>
         )
     } catch (e: any) {
-        return c.text(`Terjadi Kesalahan Sistem: ${e.message}`, 500)
+        return c.render(
+            <div class="flex items-center justify-center h-screen bg-gray-100 font-sans">
+                <div class="p-10 text-center bg-white rounded-2xl shadow-lg border border-gray-200 max-w-xl">
+                    <svg class="w-16 h-16 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <h1 class="text-2xl font-bold text-gray-800 mb-2">Terjadi Kesalahan Render</h1>
+                    <p class="text-gray-600 mb-6 bg-gray-50 p-4 rounded text-sm text-left overflow-auto border border-gray-200">
+                        {e.message}
+                    </p>
+                    <a href="/products" class="bg-[#0d5fa3] text-white px-6 py-2 rounded-xl font-bold hover:bg-[#1d8eed]">Coba Muat Ulang</a>
+                </div>
+            </div>
+        )
     }
 })
