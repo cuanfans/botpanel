@@ -13,7 +13,6 @@ export class NokosService {
         };
     }
 
-    // Fungsi pusat untuk menangkap RAW response dan HTTP Status secara transparan
     private async request(action: string, options: RequestInit = {}): Promise<any> {
         const url = `${this.baseUrl}?action=${action}`;
         try {
@@ -22,23 +21,19 @@ export class NokosService {
                 headers: this.getHeaders()
             });
 
-            // Ambil sebagai teks mentah terlebih dahulu untuk debugging
             const text = await response.text();
             
             let data;
             try {
                 data = JSON.parse(text);
             } catch (e) {
-                // Jika provider merespons dengan HTML (misal: 403 Forbidden atau 500 WAF Cloudflare)
                 throw new Error(`HTTP ${response.status} | Invalid JSON (Raw): ${text.substring(0, 150)}...`);
             }
 
-            // Berdasarkan dokumentasi Nokos: Sukses
             if (data && data.success === true) {
                 return data.data;
             }
 
-            // Berdasarkan dokumentasi Nokos: Gagal namun masih berbentuk JSON
             throw new Error(data?.error || `HTTP ${response.status} | Unknown JSON Error: ${text.substring(0, 150)}`);
         } catch (err: any) {
             throw new Error(err.message);
@@ -50,12 +45,41 @@ export class NokosService {
         return data.balance;
     }
 
+    // Modifikasi: Selalu kembalikan Array, apa pun format dari Nokos
     async getServices(): Promise<{code: string, name: string}[]> {
-        return await this.request('getServices');
+        const data = await this.request('getServices');
+        
+        if (Array.isArray(data)) {
+            return data;
+        } else if (typeof data === 'object' && data !== null) {
+            // Konversi dari { "wa": "WhatsApp" } menjadi array objects
+            return Object.entries(data).map(([code, name]) => ({
+                code: code,
+                name: String(name)
+            }));
+        }
+        
+        return [];
     }
 
+    // Modifikasi: Selalu kembalikan Array, apa pun format dari Nokos
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
-        return await this.request('getCountries');
+        const data = await this.request('getCountries');
+        
+        if (Array.isArray(data)) {
+            return data;
+        } else if (typeof data === 'object' && data !== null) {
+             // Konversi object map jika Nokos mengembalikannya dalam bentuk object
+             return Object.entries(data).map(([id, info]: [string, any]) => {
+                 if(typeof info === 'object') {
+                     return { id: parseInt(id), name: info.name || id, prefix: info.prefix || '' }
+                 } else {
+                     return { id: parseInt(id), name: String(info), prefix: '' }
+                 }
+             });
+        }
+
+        return [];
     }
 
     async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
@@ -83,11 +107,10 @@ export class NokosService {
         body.append('id', activationId);
 
         try {
-            const data = await this.request('cancelActivation', {
+            await this.request('cancelActivation', {
                 method: 'POST',
                 body: body.toString()
             });
-            // Jika request di atas tidak melempar error, berarti sukses
             return true;
         } catch (error) {
             return false;
