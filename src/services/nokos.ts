@@ -29,34 +29,26 @@ export class NokosService {
         }
 
         if (data && data.success === true) {
-            // Jika respons mengandung properti bersarang seperti 'services' atau 'countries'
-            if (data.services) return data.services;
-            if (data.countries) return data.countries;
-            return data.data;
+            return data;
         }
 
         throw new Error(data?.error || `API Error on action: ${action}`);
     }
 
     async getBalance(): Promise<number> {
-        const data = await this.request('getBalance');
-        return data.balance;
+        const res = await this.request('getBalance');
+        return res.data?.balance || res.balance || 0;
     }
 
-    // Parser yang disesuaikan khusus untuk objek bersarang "services"
+    // Parser presisi tinggi sesuai struktur mentah Nokos
     async getServices(): Promise<{code: string, name: string}[]> {
-        const data = await this.request('getServices');
+        const res = await this.request('getServices');
         
-        if (Array.isArray(data)) {
-            return data.map(item => ({
-                code: String(item.code || ''),
-                name: String(item.name || '')
-            })).filter(i => i.code !== '');
-        } 
-        
-        if (typeof data === 'object' && data !== null) {
-            // Menangani bentuk objek {"aa": {"code": "aa", "name": "Probo"}, ...}
-            return Object.values(data).map((val: any) => ({
+        // Sesuai raw output: data.services adalah objek { "aa": {code: "aa", name: "Probo"}, ... }
+        const rawServices = res.services || res.data || res;
+
+        if (typeof rawServices === 'object' && rawServices !== null) {
+            return Object.values(rawServices).map((val: any) => ({
                 code: String(val?.code || ''),
                 name: String(val?.name || '')
             })).filter(i => i.code !== '');
@@ -67,20 +59,21 @@ export class NokosService {
 
     // Parser fleksibel untuk countries
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
-        const data = await this.request('getCountries');
-        
-        if (Array.isArray(data)) {
-            return data.map(item => ({
-                id: Number(item.id ?? 0),
-                name: String(item.name || ''),
+        const res = await this.request('getCountries');
+        const rawCountries = res.countries || res.data || res;
+
+        if (Array.isArray(rawCountries)) {
+            return rawCountries.map(item => ({
+                id: Number(item.id ?? item.country_id ?? 0),
+                name: String(item.name || item.country_name || ''),
                 prefix: String(item.prefix || '')
             })).filter(i => !isNaN(i.id));
         }
 
-        if (typeof data === 'object' && data !== null) {
-            return Object.values(data).map((val: any) => ({
-                id: Number(val?.id ?? 0),
-                name: String(val?.name || ''),
+        if (typeof rawCountries === 'object' && rawCountries !== null) {
+            return Object.values(rawCountries).map((val: any) => ({
+                id: Number(val?.id ?? val?.country_id ?? 0),
+                name: String(val?.name || val?.country_name || ''),
                 prefix: String(val?.prefix || '')
             })).filter(i => !isNaN(i.id));
         }
@@ -89,7 +82,8 @@ export class NokosService {
     }
 
     async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
-        return await this.request(`getPrices&service=${service}&country=${country}&server=${server}`);
+        const res = await this.request(`getPrices&service=${service}&country=${country}&server=${server}`);
+        return res.data || res;
     }
 
     async getNumber(service: string, country: string, server: string = 's2'): Promise<{ activation_id: number, phone: string, price: number }> {
@@ -98,14 +92,16 @@ export class NokosService {
         body.append('country', country);
         body.append('server', server);
 
-        return await this.request('getNumber', {
+        const res = await this.request('getNumber', {
             method: 'POST',
             body: body.toString()
         });
+        return res.data || res;
     }
 
     async getStatus(activationId: string): Promise<{ status: string, code?: string, sms?: string }> {
-        return await this.request(`getStatus&id=${activationId}`);
+        const res = await this.request(`getStatus&id=${activationId}`);
+        return res.data || res;
     }
 
     async cancelActivation(activationId: string): Promise<boolean> {
