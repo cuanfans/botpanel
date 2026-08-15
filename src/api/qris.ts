@@ -26,7 +26,7 @@ qrisRouter.post('/webhook', async (c) => {
     try {
         const data = JSON.parse(payloadText)
         
-        // Cek status transaksi
+        // Cek status transaksi settlement (Lunas)
         if (data.transaction_status === 'settlement') {
             const orderId = data.order_id
             
@@ -42,9 +42,7 @@ qrisRouter.post('/webhook', async (c) => {
                     c.env.DB.prepare("UPDATE telegram_users SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?").bind(deposit.amount, deposit.telegram_id)
                 ])
                 
-                // Verifikasi batch berhasil
                 if (batch[0].meta.changes > 0 && batch[1].meta.changes > 0) {
-                    // Berhasil update
                     return c.json({ message: "WEBHOOK VALID - Saldo ditambahkan" }, 200)
                 }
             }
@@ -62,27 +60,56 @@ qrisRouter.post('/create-invoice', async (c) => {
     const { telegram_id, amount } = body
 
     if (amount < 5000 || amount > 499999) {
-        return c.json({ error: "Deposit harus antara 5.000 dan 499.999" }, 400)
+        return c.json({ error: "Deposit harus antara Rp 5.000 dan Rp 499.999" }, 400)
     }
 
     const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
     
     try {
-        // Simpan data pending ke database
+        // Ambil API Key Gopay dari database
+        const config = await c.env.DB.prepare(
+            "SELECT config_value FROM panel_configs WHERE config_key = 'qris_api_key'"
+        ).first<{ config_value: string }>()
+
+        if (!config || !config.config_value) {
+            return c.json({ error: "API Key QRIS belum dikonfigurasi admin." }, 500)
+        }
+
+        // 1. Simpan data pending ke database
         await c.env.DB.prepare(`
             INSERT INTO deposits (order_id, telegram_id, amount, status)
             VALUES (?, ?, ?, 'pending')
         `).bind(orderId, telegram_id, amount).run()
 
-        // TODO: Lakukan HTTP POST ke endpoint Eksternal Pembuat QRIS sesuai base URL penyedia
-        // Contoh return sementara
+        // 2. Tembak API Eksternal QRIS Pay
+        const qrisResponse = await fetch('https://qrispay.pages.dev/api/trx', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${config.config_value}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                order_id: orderId,
+                amount: amount
+            })
+        })
+
+        const qrisData = await qrisResponse.json()
+
+        if (!qrisResponse.ok) {
+            // Jika gateway menolak, batalkan deposit di database
+            await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
+            return c.json({ error: "Gagal membuat QRIS dari Gateway." }, 500)
+        }
+
         return c.json({ 
             success: true, 
             order_id: orderId,
             amount: amount,
+            qris_url: qrisData.qris_url || qrisData.checkout_url, // Sesuaikan dengan response ASLI dari gateway
             message: "Invoice berhasil dibuat"
         })
     } catch (error) {
-        return c.json({ error: "Terjadi kesalahan sistem" }, 500)
+        return c.json({ error: "Terjadi kesalahan sistem saat menghubungi payment gateway" }, 500)
     }
 })
