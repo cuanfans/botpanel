@@ -44,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // SINKRONISASI TOTAL: Layanan, Negara, dan Harga+Stok
+    // SINKRONISASI TOTAL & AMAN
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -54,12 +54,12 @@ export const POST = createRoute(async (c) => {
 
             const nokos = new NokosService(config.config_value);
             
-            // 1. Tarik semua data dari Nokos
+            // 1. Tarik semua data dari Nokos (bisa butuh waktu beberapa detik)
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
-            const prices = await nokos.getPrices('s2'); // Tarik semua harga server Plus
+            const prices = await nokos.getPrices('s2');
 
-            // 2. Kosongkan data lama (urutan dari child ke parent)
+            // 2. Kosongkan data lama (dari anak ke induk untuk menghindari bentrok)
             await db.prepare("DELETE FROM nokos_prices").run();
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
@@ -67,12 +67,14 @@ export const POST = createRoute(async (c) => {
             // 3. Masukkan Data Negara
             let countryCount = 0;
             const countryStatements = [];
+            const validCountries = new Set<number>(); // Track negara valid
             for (const cty of countries) {
                 if (cty.id !== undefined && cty.name) {
                     countryStatements.push(
                         db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)")
                           .bind(Number(cty.id), String(cty.name), String(cty.prefix || ''))
                     );
+                    validCountries.add(Number(cty.id));
                     countryCount++;
                 }
             }
@@ -81,39 +83,49 @@ export const POST = createRoute(async (c) => {
             // 4. Masukkan Data Layanan
             let serviceCount = 0;
             const serviceStatements = [];
+            const validServices = new Set<string>(); // Track layanan valid
             for (const srv of services) {
                 if (srv.code && srv.name) {
                     serviceStatements.push(
                         db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)")
                           .bind(String(srv.code), String(srv.name))
                     );
+                    validServices.add(String(srv.code));
                     serviceCount++;
                 }
             }
             if (serviceStatements.length > 0) await db.batch(serviceStatements);
 
-            // 5. Masukkan Data Harga dan Stok (Membongkar JSON nested)
+            // 5. Masukkan Data Harga dan Stok (Filter ketat untuk menghindari error Foreign Key)
             let priceCount = 0;
             const priceStatements = [];
             
-            if (prices && typeof prices === 'object') {
-                for (const [countryId, servicesObj] of Object.entries(prices)) {
-                    if (typeof servicesObj === 'object' && servicesObj !== null) {
-                        for (const [serviceCode, data] of Object.entries(servicesObj as any)) {
-                            // Hanya masukkan layanan yang benar-benar ada stok atau datanya valid
-                            if (data && data.cost !== undefined) {
-                                priceStatements.push(
-                                    db.prepare("INSERT INTO nokos_prices (country_id, service_code, server, price, stock) VALUES (?, ?, ?, ?, ?)")
-                                      .bind(Number(countryId), String(serviceCode), 's2', Number(data.cost), Number(data.count || 0))
-                                );
-                                priceCount++;
-                            }
+            for (const [countryId, servicesObj] of Object.entries(prices)) {
+                const cid = Number(countryId);
+                // Hanya izinkan harga yang negaranya berhasil di-input
+                if (!validCountries.has(cid)) continue; 
+
+                if (typeof servicesObj === 'object' && servicesObj !== null) {
+                    for (const [serviceCode, data] of Object.entries(servicesObj as any)) {
+                        // Hanya izinkan harga yang layanannya berhasil di-input
+                        if (!validServices.has(serviceCode)) continue; 
+                        
+                        // Ekstrak cost/price & count/stock dari object
+                        if (data && (data.cost !== undefined || data.price !== undefined)) {
+                            const cost = Number(data.cost ?? data.price ?? 0);
+                            const count = Number(data.count ?? data.stock ?? 0);
+                            
+                            priceStatements.push(
+                                db.prepare("INSERT INTO nokos_prices (country_id, service_code, server, price, stock) VALUES (?, ?, ?, ?, ?)")
+                                  .bind(cid, String(serviceCode), 's2', cost, count)
+                            );
+                            priceCount++;
                         }
                     }
                 }
             }
 
-            // Eksekusi insert Harga menggunakan chunk per 100 baris untuk menghindari timeout/overload D1
+            // Eksekusi insert Harga secara chunked (maks 100 queries per batch D1)
             const chunkSize = 100;
             for (let i = 0; i < priceStatements.length; i += chunkSize) {
                 const chunk = priceStatements.slice(i, i + chunkSize);
@@ -143,7 +155,6 @@ export default createRoute(async (c) => {
 
     const totalServices = await db.prepare("SELECT COUNT(*) as total FROM nokos_services").first<{total: number}>();
     const totalCountries = await db.prepare("SELECT COUNT(*) as total FROM nokos_countries").first<{total: number}>();
-    // Tambahan statistik harga di UI
     const totalPrices = await db.prepare("SELECT COUNT(*) as total FROM nokos_prices").first<{total: number}>();
 
     return c.render(
