@@ -23,7 +23,7 @@ async function sendTelegramMessage(botToken: string, chatId: string | number, te
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).catch(() => {}) // Hindari crash jika telegram error
+    }).catch(() => {}) 
 }
 
 // Helper Bendera Negara
@@ -84,7 +84,6 @@ telegramRouter.post('/webhook', async (c) => {
                 body.message = cb.message; body.message.text = '/deposit'; body.message.from = cb.from;
             }
             else if (data === 'menu_order') {
-                // Tampilkan Pilihan Server terlebih dahulu (Sesuai Screenshot)
                 const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih server penyedia OTP yang ingin Anda gunakan:`
                 const srvKb = {
                     inline_keyboard: [
@@ -144,16 +143,47 @@ telegramRouter.post('/webhook', async (c) => {
                             throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawQrisResponse.substring(0, 150)}</code>`)
                         }
 
-                        if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url)) {
-                            const finalUrl = qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
-                            const successText = `✅ <b>INVOICE DIBUAT</b>\n\n<b>Order ID:</b> <code>${orderId}</code>\n<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\nSilakan klik tombol di bawah ini untuk membayar via QRIS. Saldo akan masuk otomatis 1-2 detik setelah lunas.`
-                            const payBtn = {
-                                inline_keyboard: [
-                                    [{ text: "💳 Bayar Sekarang", url: finalUrl }],
-                                    [{ text: "🔙 Kembali", callback_data: "menu_start" }]
-                                ]
+                        if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
+                            const finalUrl = qrisRes.paylink || qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
+                            const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
+                            
+                            const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
+
+                            await c.env.DB.prepare(`UPDATE deposits SET qris_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', orderId).run()
+
+                            const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
+                                                `<b>Order ID:</b> <code>${orderId}</code>\n`+
+                                                `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
+                                                `📸 <b>Instruksi Pembayaran:</b>\n`+
+                                                `Silakan screenshot/simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
+                                                `⏳ Saldo otomatis masuk 1-2 detik setelah lunas.`;
+
+                            const inline_keyboard = [];
+                            if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
+                            inline_keyboard.push([{ text: "🔙 Kembali", callback_data: "menu_start" }]);
+                            const payBtn = { inline_keyboard };
+
+                            if (qrImageUrl) {
+                                await fetch(`https://api.telegram.org/bot${botToken}/deleteMessage`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+                                }).catch(() => {});
+
+                                await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        chat_id: chatId,
+                                        photo: qrImageUrl,
+                                        caption: successText,
+                                        reply_markup: payBtn,
+                                        parse_mode: 'HTML'
+                                    })
+                                });
+                            } else {
+                                await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
                             }
-                            await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
                         } else {
                             await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
                             const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
@@ -165,7 +195,7 @@ telegramRouter.post('/webhook', async (c) => {
                 }
             }
             
-            // 3. PAGINATION LAYANAN (Halaman 1 Khusus Aplikasi Populer)
+            // 3. PAGINATION LAYANAN
             else if (data.startsWith('srv_')) {
                 const parts = data.split('_')
                 const server = parts[1] || 's2'
@@ -176,14 +206,12 @@ telegramRouter.post('/webhook', async (c) => {
                 const maxPage = Math.ceil((totalSrv?.t || 0) / limit) || 1
                 
                 let srvs = [];
-                // Hardcode List Populer untuk Halaman 1 sesuai screenshot
                 const popularCodes = ['wa', 'tg', 'ka', 'lf', 'fb', 'ig', 'go', 'amb', 'jg', 'ni', 'fr', 'xh', 'bha', 'xd', 'ot'];
                 
                 if (page === 1) {
                     const placeholders = popularCodes.map(() => '?').join(',');
                     srvs = await c.env.DB.prepare(`SELECT code, name FROM nokos_services WHERE code IN (${placeholders})`).bind(...popularCodes).all<{code: string, name: string}>();
                     srvs = srvs.results || [];
-                    // Urutkan ulang sesuai urutan popularCodes
                     srvs.sort((a, b) => popularCodes.indexOf(a.code) - popularCodes.indexOf(b.code));
                 } else {
                     const offset = (page - 1) * limit
@@ -224,7 +252,7 @@ telegramRouter.post('/webhook', async (c) => {
                 await sendTelegramMessage(botToken, chatId, srvText, { inline_keyboard }, messageId)
             }
             
-            // 4. PAGINATION NEGARA (Halaman 1 Khusus Negara Populer)
+            // 4. PAGINATION NEGARA
             else if (data.startsWith('sv_') || data.startsWith('cty_')) {
                 const parts = data.split('_')
                 const isCtyNav = parts[0] === 'cty'
@@ -240,7 +268,7 @@ telegramRouter.post('/webhook', async (c) => {
                 const maxPage = Math.ceil((totalCty?.t || 0) / limit) || 1
                 
                 let ctys = [];
-                const popularCtyIds = [6, 22, 187, 16, 4, 73, 10, 7, 52, 3, 1, 5, 2, 19]; // ID sesuai screenshot
+                const popularCtyIds = [6, 22, 187, 16, 4, 73, 10, 7, 52, 3, 1, 5, 2, 19];
 
                 if (page === 1) {
                     const placeholders = popularCtyIds.map(() => '?').join(',');
@@ -278,7 +306,7 @@ telegramRouter.post('/webhook', async (c) => {
                 await sendTelegramMessage(botToken, chatId, ctyText, { inline_keyboard }, messageId)
             }
 
-            // 5. CEK HARGA NOKOS (Mendukung Multi-Operator)
+            // 5. CEK HARGA NOKOS
             else if (data.startsWith('ct_')) {
                 const parts = data.split('_')
                 const server = parts[1]
@@ -300,12 +328,10 @@ telegramRouter.post('/webhook', async (c) => {
                     if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
                         await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${srvName}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                     } else {
-                        // Handle struktur JSON bersarang dari provider Nokos (berdasarkan Operator atau Tier harga)
                         let priceOptions = []
                         if (serviceData.cost !== undefined || serviceData.price !== undefined) {
-                            priceOptions.push(serviceData) // Single Price
+                            priceOptions.push(serviceData)
                         } else {
-                            // Multiple Tiers/Operators seperti di screenshot 'negara-dipilih.png'
                             for (const [op, optData] of Object.entries(serviceData)) {
                                 if ((optData as any).cost !== undefined || (optData as any).price !== undefined) {
                                     priceOptions.push({ ...optData as any, operator: op })
@@ -320,7 +346,6 @@ telegramRouter.post('/webhook', async (c) => {
                             const rawCost = Number(opt.cost ?? opt.price ?? 0)
                             const stock = opt.count ?? 0
                             
-                            // Kalkulasi Margin per iterasi
                             const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId)
                             
                             row.push({ text: `Rp. ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}` })
@@ -522,10 +547,40 @@ telegramRouter.post('/webhook', async (c) => {
                  throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawResponse.substring(0, 150)}</code>`)
             }
 
-            if (qrisCall.ok && (qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url)) {
-                const finalUrl = qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
-                const payBtn = { inline_keyboard: [[{ text: "💳 Bayar Sekarang", url: finalUrl }]] }
-                await sendTelegramMessage(botToken, chatId, `✅ <b>INVOICE DIBUAT</b>\n\n<b>Order ID:</b> <code>${orderId}</code>\n<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\nKlik tombol di bawah untuk membayar.`, payBtn)
+            if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
+                const finalUrl = qrisRes.paylink || qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
+                const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
+                
+                const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
+                await c.env.DB.prepare(`UPDATE deposits SET qris_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', orderId).run()
+
+                const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
+                                    `<b>Order ID:</b> <code>${orderId}</code>\n`+
+                                    `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
+                                    `📸 <b>Instruksi Pembayaran:</b>\n`+
+                                    `Silakan screenshot atau simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
+                                    `⏳ Saldo akan masuk otomatis 1-2 detik setelah lunas.`;
+
+                const inline_keyboard = [];
+                if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
+                const payBtn = { inline_keyboard };
+
+                if (qrImageUrl) {
+                    await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chat_id: chatId,
+                            photo: qrImageUrl,
+                            caption: successText,
+                            reply_markup: inline_keyboard.length > 0 ? payBtn : undefined,
+                            parse_mode: 'HTML'
+                        })
+                    });
+                } else {
+                    await sendTelegramMessage(botToken, chatId, successText, inline_keyboard.length > 0 ? payBtn : undefined);
+                }
+
             } else {
                 await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
                 const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
