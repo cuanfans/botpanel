@@ -3,10 +3,6 @@ compatibility_date = "2026-08-15"
 compatibility_flags = [ "nodejs_compat" ]
 pages_build_output_dir = "dist"
 
-# Pengaturan Assets untuk file statis (HonoX)
-[site]
-bucket = "./public"
-
 # Binding Database D1
 [[d1_databases]]
 binding = "DB"
