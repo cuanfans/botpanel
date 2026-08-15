@@ -29,6 +29,9 @@ export class NokosService {
         }
 
         if (data && data.success === true) {
+            // Jika respons mengandung properti bersarang seperti 'services' atau 'countries'
+            if (data.services) return data.services;
+            if (data.countries) return data.countries;
             return data.data;
         }
 
@@ -40,44 +43,45 @@ export class NokosService {
         return data.balance;
     }
 
-    // Penanganan fleksibel untuk getServices
+    // Parser yang disesuaikan khusus untuk objek bersarang "services"
     async getServices(): Promise<{code: string, name: string}[]> {
         const data = await this.request('getServices');
         
         if (Array.isArray(data)) {
             return data.map(item => ({
-                code: String(item.code || item.id || ''),
-                name: String(item.name || item.title || item.code || '')
+                code: String(item.code || ''),
+                name: String(item.name || '')
             })).filter(i => i.code !== '');
         } 
         
         if (typeof data === 'object' && data !== null) {
-            return Object.entries(data).map(([key, val]: [string, any]) => ({
-                code: key,
-                name: typeof val === 'object' ? (val.name || key) : String(val)
-            }));
+            // Menangani bentuk objek {"aa": {"code": "aa", "name": "Probo"}, ...}
+            return Object.values(data).map((val: any) => ({
+                code: String(val?.code || ''),
+                name: String(val?.name || '')
+            })).filter(i => i.code !== '');
         }
 
         return [];
     }
 
-    // Penanganan fleksibel untuk getCountries
+    // Parser fleksibel untuk countries
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
         const data = await this.request('getCountries');
         
         if (Array.isArray(data)) {
             return data.map(item => ({
-                id: Number(item.id ?? item.country_id ?? 0),
-                name: String(item.name || item.country_name || ''),
-                prefix: String(item.prefix || item.code || '')
+                id: Number(item.id ?? 0),
+                name: String(item.name || ''),
+                prefix: String(item.prefix || '')
             })).filter(i => !isNaN(i.id));
         }
 
         if (typeof data === 'object' && data !== null) {
-            return Object.entries(data).map(([key, val]: [string, any]) => ({
-                id: Number(val.id ?? key),
-                name: String(val.name || val || ''),
-                prefix: String(val.prefix || '')
+            return Object.values(data).map((val: any) => ({
+                id: Number(val?.id ?? 0),
+                name: String(val?.name || ''),
+                prefix: String(val?.prefix || '')
             })).filter(i => !isNaN(i.id));
         }
 
