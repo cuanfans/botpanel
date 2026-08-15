@@ -1,9 +1,7 @@
 name = "telegram-bot-panel"
 compatibility_date = "2026-08-15"
 compatibility_flags = [ "nodejs_compat" ]
-
-# Titik masuk utama
-main = "src/index.ts"
+pages_build_output_dir = "dist"
 
 # Pengaturan Assets untuk file statis (HonoX)
 [site]
