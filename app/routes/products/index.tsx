@@ -5,14 +5,15 @@ import { NokosService } from '../../../src/services/nokos'
 export default createRoute(async (c) => {
     const db = c.env.DB as D1Database
     
-    // Ambil query parameter dari URL (Default: Negara 6 / Indonesia, Server s2)
+    // Ambil query parameter dari URL
     const currentCountry = c.req.query('country') || '6'
     const currentServer = c.req.query('server') || 's2'
 
     let error = ''
-    let productList: { code: string, name: string, cost: number, stock: number, markup: number, finalPrice: number }[] = []
+    let productList: { code: string, name: string, rawCost: number, costIDR: number, stock: number, markup: number, finalPrice: number }[] = []
     let markupPercent = 10
     let markupFlat = 500
+    let exchangeRate = 17825 // Default Kurs internal Nokos (4278 / 0.24)
 
     try {
         // 1. Ambil Konfigurasi dari Database
@@ -25,40 +26,46 @@ export default createRoute(async (c) => {
         const apiKey = configs['nokos_api_key']
         markupPercent = Number(configs['markup_global_percent'] || 10)
         markupFlat = Number(configs['markup_global_flat'] || 500)
+        
+        // Cek jika admin mengubah kurs di panel settings
+        if (configs['nokos_exchange_rate']) {
+            exchangeRate = Number(configs['nokos_exchange_rate'])
+        }
 
-        // 2. Ambil Master Data dari Database Lokal
+        // 2. Ambil Master Data
         const countriesDb = await db.prepare("SELECT id, name, prefix FROM nokos_countries ORDER BY name ASC").all<{id: number, name: string, prefix: string}>()
         const servicesDb = await db.prepare("SELECT code, name FROM nokos_services").all<{code: string, name: string}>()
         
-        // Buat map (kamus) untuk mencari nama layanan dengan cepat berdasarkan kodenya
         const serviceMap = new Map<string, string>()
         servicesDb.results?.forEach(s => serviceMap.set(s.code, s.name))
 
-        // 3. Tarik Harga dan Stok REAL-TIME dari API Nokos
+        // 3. Tarik Harga dan Stok REAL-TIME
         if (apiKey) {
             const nokos = new NokosService(apiKey)
             
             try {
-                // Perbaikan parameter: (service, country, server)
                 const rawPrices = await nokos.getPrices('', currentCountry, currentServer)
                 const pricesData = rawPrices[currentCountry] || rawPrices
 
-                // 4. Kalkulasi Harga
+                // 4. Kalkulasi Harga Konversi ke IDR (Raw * 17.825)
                 if (typeof pricesData === 'object' && pricesData !== null) {
                     for (const [code, data] of Object.entries(pricesData as any)) {
                         if (data && (data.cost !== undefined || data.price !== undefined)) {
-                            const providerCost = Number(data.cost ?? data.price ?? 0)
+                            const rawCost = Number(data.cost ?? data.price ?? 0)
                             const stock = Number(data.count ?? data.stock ?? 0)
                             
-                            // FILTER DIHAPUS: Semua data akan dimasukkan ke array, termasuk stok 0
+                            // Konversi ke IDR (contoh: 0.24 * 17825 = 4278)
+                            const costIDR = rawCost * exchangeRate
 
-                            const calculatedMarkup = (providerCost * (markupPercent / 100)) + markupFlat
-                            const finalPrice = providerCost + calculatedMarkup
+                            // Hitung Keuntungan dari harga IDR
+                            const calculatedMarkup = (costIDR * (markupPercent / 100)) + markupFlat
+                            const finalPrice = costIDR + calculatedMarkup
 
                             productList.push({
                                 code: code,
                                 name: serviceMap.get(code) || code.toUpperCase(),
-                                cost: providerCost,
+                                rawCost: rawCost,
+                                costIDR: costIDR,
                                 stock: stock,
                                 markup: calculatedMarkup,
                                 finalPrice: finalPrice
@@ -67,14 +74,12 @@ export default createRoute(async (c) => {
                     }
                 }
 
-                // Urutkan produk berdasarkan abjad nama layanan
+                // Urutkan berdasarkan abjad layanan
                 productList.sort((a, b) => a.name.localeCompare(b.name))
 
             } catch (apiErr: any) {
-                // Tangkap pesan jika Nokos sedang down (contoh: 500 Internal Server Error di server s1)
                 error = `Gagal menarik data dari API Nokos: ${apiErr.message}`
             }
-
         } else {
             error = "API Key Nokos belum diatur. Silakan atur di menu Pengaturan."
         }
@@ -88,7 +93,7 @@ export default createRoute(async (c) => {
                         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
                             <div>
                                 <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800">Katalog Produk</h1>
-                                <p class="text-sm md:text-base text-gray-500 mt-1">Pantau harga modal, stok real-time, dan estimasi harga jual bot.</p>
+                                <p class="text-sm md:text-base text-gray-500 mt-1">Pantau harga modal (IDR), stok real-time, dan estimasi harga jual bot.</p>
                             </div>
                             
                             <form method="GET" class="flex flex-col sm:flex-row gap-3">
@@ -118,9 +123,15 @@ export default createRoute(async (c) => {
                             </div>
                         )}
 
-                        <div class="flex items-center gap-4 text-sm text-gray-600 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                            <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                            <p>Menampilkan <b>{productList.length} layanan</b> untuk negara ini. Aturan markup saat ini: <b>{markupPercent}% + Rp {markupFlat}</b>.</p>
+                        <div class="flex flex-col md:flex-row gap-4">
+                            <div class="flex-1 flex items-center gap-4 text-sm text-gray-600 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                <svg class="w-5 h-5 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                <p>Menampilkan <b>{productList.length} layanan</b> untuk negara ini. Aturan markup: <b>{markupPercent}% + Rp {markupFlat}</b>.</p>
+                            </div>
+                            <div class="flex-1 flex items-center gap-4 text-sm text-gray-600 bg-yellow-50 p-4 rounded-xl border border-yellow-100">
+                                <svg class="w-5 h-5 text-yellow-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                <p>Konversi Mata Uang Asing (Nokos) ke IDR: <b>Dikali Rp {exchangeRate.toLocaleString('id-ID')}</b>.</p>
+                            </div>
                         </div>
                     </div>
 
@@ -133,7 +144,8 @@ export default createRoute(async (c) => {
                                             <tr class="bg-gray-100 text-gray-700 text-sm uppercase tracking-wider border-b border-gray-200">
                                                 <th class="p-4 font-bold">Layanan</th>
                                                 <th class="p-4 font-bold text-center">Kode</th>
-                                                <th class="p-4 font-bold text-right">Modal (Nokos)</th>
+                                                <th class="p-4 font-bold text-right text-gray-400">Modal Raw</th>
+                                                <th class="p-4 font-bold text-right">Modal Nokos (IDR)</th>
                                                 <th class="p-4 font-bold text-center">Stok</th>
                                                 <th class="p-4 font-bold text-right text-green-700">Harga Jual (Est)</th>
                                             </tr>
@@ -145,8 +157,11 @@ export default createRoute(async (c) => {
                                                     <td class="p-4 text-center">
                                                         <span class="bg-gray-200 text-gray-700 py-1 px-2 rounded font-mono text-xs">{product.code}</span>
                                                     </td>
-                                                    <td class="p-4 text-right text-gray-500">
-                                                        Rp {product.cost.toLocaleString('id-ID')}
+                                                    <td class="p-4 text-right font-mono text-gray-400 text-xs">
+                                                        {product.rawCost}
+                                                    </td>
+                                                    <td class="p-4 text-right text-gray-600 font-medium">
+                                                        Rp {Math.ceil(product.costIDR).toLocaleString('id-ID')}
                                                     </td>
                                                     <td class="p-4 text-center">
                                                         {product.stock > 1000 ? (
