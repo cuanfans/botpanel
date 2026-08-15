@@ -14,7 +14,7 @@ export const Sidebar: FC<{ activePath: string }> = ({ activePath }) => {
             <div class="p-6 text-2xl font-bold border-b border-blue-800">
                 BotPanel PRO
             </div>
-            <nav class="flex-1 p-4 space-y-2">
+            <nav class="flex-1 p-4 space-y-2 overflow-y-auto">
                 {menus.map((menu) => (
                     <a 
                         href={menu.path} 
@@ -28,9 +28,27 @@ export const Sidebar: FC<{ activePath: string }> = ({ activePath }) => {
                     </a>
                 ))}
             </nav>
-            <div class="p-4 text-xs text-blue-300 border-t border-blue-800 text-center">
-                Sistem Relay v1.0 &copy; 2026
+            <div class="p-4 border-t border-blue-800">
+                <button onclick="logout()" class="w-full text-left px-4 py-2 text-red-200 hover:text-white hover:bg-red-600 rounded-lg transition font-bold text-sm">
+                    Keluar (Logout)
+                </button>
+                <div class="mt-4 text-xs text-blue-300 text-center">
+                    Sistem Relay v1.0 &copy; 2026
+                </div>
             </div>
+            
+            <script dangerouslySetInnerHTML={{__html: `
+                async function logout() {
+                    if(confirm('Apakah Anda yakin ingin keluar?')) {
+                        try {
+                            await fetch('/api/auth/logout', { method: 'POST' });
+                            window.location.href = '/login';
+                        } catch (err) {
+                            console.error('Logout error:', err);
+                        }
+                    }
+                }
+            `}} />
         </aside>
     )
 }
