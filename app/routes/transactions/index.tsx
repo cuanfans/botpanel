@@ -18,39 +18,39 @@ export default createRoute(async (c) => {
     }>()
 
     return c.render(
-        <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
+        <div class="flex flex-col md:flex-row h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/transactions" />
             
-            <main class="flex-1 p-10 overflow-y-auto">
-                <h1 class="text-3xl font-extrabold text-gray-800 mb-2">Laporan Penjualan</h1>
-                <p class="text-gray-500 mb-8">Riwayat 100 transaksi terakhir yang berhasil maupun gagal.</p>
+            <main class="flex-1 p-4 md:p-10 overflow-y-auto w-full">
+                <h1 class="text-2xl md:text-3xl font-extrabold text-gray-800 mb-2">Laporan Penjualan</h1>
+                <p class="text-sm md:text-base text-gray-500 mb-6 md:mb-8">Riwayat 100 transaksi terakhir yang berhasil maupun gagal.</p>
 
-                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto">
-                    <table class="w-full text-left border-collapse whitespace-nowrap">
+                <div class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-x-auto w-full">
+                    <table class="w-full text-left border-collapse min-w-[800px]">
                         <thead>
-                            <tr class="bg-gray-50 border-b border-gray-200 text-sm text-gray-500 uppercase tracking-wider">
-                                <th class="p-4 font-bold">Waktu</th>
-                                <th class="p-4 font-bold">User</th>
-                                <th class="p-4 font-bold">Item (Srv_Ct)</th>
-                                <th class="p-4 font-bold text-right">Modal Nokos</th>
-                                <th class="p-4 font-bold text-right text-purple-600">Margin/Untung</th>
-                                <th class="p-4 font-bold text-right text-blue-600">Potong Saldo</th>
-                                <th class="p-4 font-bold">Status</th>
+                            <tr class="bg-gray-50 border-b border-gray-200 text-xs md:text-sm text-gray-500 uppercase tracking-wider">
+                                <th class="p-3 md:p-4 font-bold">Waktu</th>
+                                <th class="p-3 md:p-4 font-bold">User</th>
+                                <th class="p-3 md:p-4 font-bold">Item (Srv_Ct)</th>
+                                <th class="p-3 md:p-4 font-bold text-right">Modal Nokos</th>
+                                <th class="p-3 md:p-4 font-bold text-right text-purple-600">Margin/Untung</th>
+                                <th class="p-3 md:p-4 font-bold text-right text-blue-600">Potong Saldo</th>
+                                <th class="p-3 md:p-4 font-bold">Status</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-100 text-sm">
                             {txRaw.results?.map(tx => (
                                 <tr class="hover:bg-gray-50">
-                                    <td class="p-4 text-gray-500">{new Date(tx.created_at).toLocaleString('id-ID')}</td>
-                                    <td class="p-4">
+                                    <td class="p-3 md:p-4 text-gray-500 whitespace-nowrap">{new Date(tx.created_at).toLocaleString('id-ID')}</td>
+                                    <td class="p-3 md:p-4 whitespace-nowrap">
                                         <div class="font-semibold text-gray-800">@{tx.username || 'unknown'}</div>
                                         <div class="text-xs text-gray-400 font-mono">{tx.telegram_id}</div>
                                     </td>
-                                    <td class="p-4 font-mono font-bold text-gray-700">{tx.service_code}_{tx.country_code}</td>
-                                    <td class="p-4 text-right text-gray-600">Rp {tx.provider_cost}</td>
-                                    <td class="p-4 text-right font-bold text-purple-600">+Rp {tx.markup_applied}</td>
-                                    <td class="p-4 text-right font-bold text-[#0d5fa3]">Rp {tx.final_price}</td>
-                                    <td class="p-4">
+                                    <td class="p-3 md:p-4 font-mono font-bold text-gray-700">{tx.service_code}_{tx.country_code}</td>
+                                    <td class="p-3 md:p-4 text-right text-gray-600 whitespace-nowrap">Rp {tx.provider_cost}</td>
+                                    <td class="p-3 md:p-4 text-right font-bold text-purple-600 whitespace-nowrap">+Rp {tx.markup_applied}</td>
+                                    <td class="p-3 md:p-4 text-right font-bold text-[#0d5fa3] whitespace-nowrap">Rp {tx.final_price}</td>
+                                    <td class="p-3 md:p-4">
                                         <span class={`px-2 py-1 text-xs font-bold rounded-full ${
                                             tx.status === 'success' ? 'bg-green-100 text-green-700' : 
                                             tx.status === 'failed' ? 'bg-red-100 text-red-700' : 
@@ -63,7 +63,7 @@ export default createRoute(async (c) => {
                             ))}
                             {(!txRaw.results || txRaw.results.length === 0) && (
                                 <tr>
-                                    <td colSpan={7} class="p-8 text-center text-gray-400">Belum ada riwayat transaksi.</td>
+                                    <td colSpan={7} class="p-6 md:p-8 text-center text-gray-400 text-sm">Belum ada riwayat transaksi.</td>
                                 </tr>
                             )}
                         </tbody>
