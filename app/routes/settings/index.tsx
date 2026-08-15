@@ -44,7 +44,7 @@ export const POST = createRoute(async (c) => {
         return c.redirect('/settings?success=Pengaturan+sistem+berhasil+disimpan')
     }
 
-    // BARU: Logika Sinkronisasi Data Nokos (Produk & Negara)
+    // Logika Sinkronisasi Data Nokos dengan Safety Check
     if (action === 'sync_nokos') {
         try {
             const config = await db.prepare("SELECT config_value FROM panel_configs WHERE config_key = 'nokos_api_key'").first<{config_value: string}>();
@@ -53,31 +53,47 @@ export const POST = createRoute(async (c) => {
             }
 
             const nokos = new NokosService(config.config_value);
+            
+            // Penarikan data dari Nokos
             const services = await nokos.getServices();
             const countries = await nokos.getCountries();
+
+            // Mencegah error 'map' jika entah mengapa data masih undefined
+            if (!services || !countries) {
+                 return c.redirect(`/settings?error=Gagal+Sinkronisasi:+Respons+Katalog+Kosong`);
+            }
 
             // Hapus data lama untuk refresh katalog
             await db.prepare("DELETE FROM nokos_services").run();
             await db.prepare("DELETE FROM nokos_countries").run();
 
-            // Insert Batch Negara
-            const countryStmts = countries.map(country => 
-                db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)").bind(country.id, country.name, country.prefix)
-            );
+            // Insert Batch Negara - hanya memproses data jika berbentuk array
+            const countryStmts = [];
+            if(Array.isArray(countries)){
+                 for(const country of countries){
+                      countryStmts.push(db.prepare("INSERT INTO nokos_countries (id, name, prefix) VALUES (?, ?, ?)").bind(country.id, country.name, country.prefix || ''));
+                 }
+            }
             
             // Insert Batch Layanan
-            const serviceStmts = services.map(srv => 
-                db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)").bind(srv.code, srv.name)
-            );
-
-            // Eksekusi Batch di D1 (Max 100 queries per batch, jadi kita split secara dinamis jika perlu, 
-            // tapi HonoX Cloudflare D1 batching support up to 100 statements)
-            const chunkSize = 50;
-            for (let i = 0; i < countryStmts.length; i += chunkSize) {
-                await db.batch(countryStmts.slice(i, i + chunkSize));
+            const serviceStmts = [];
+            if(Array.isArray(services)){
+                 for(const srv of services){
+                      serviceStmts.push(db.prepare("INSERT INTO nokos_services (code, name) VALUES (?, ?)").bind(srv.code, srv.name || srv.code));
+                 }
             }
-            for (let i = 0; i < serviceStmts.length; i += chunkSize) {
-                await db.batch(serviceStmts.slice(i, i + chunkSize));
+
+            // Eksekusi Batch di D1
+            const chunkSize = 50;
+            if (countryStmts.length > 0) {
+                 for (let i = 0; i < countryStmts.length; i += chunkSize) {
+                     await db.batch(countryStmts.slice(i, i + chunkSize));
+                 }
+            }
+            if (serviceStmts.length > 0) {
+                 for (let i = 0; i < serviceStmts.length; i += chunkSize) {
+                     await db.batch(serviceStmts.slice(i, i + chunkSize));
+                 }
             }
 
             return c.redirect('/settings?success=Katalog+Produk+dan+Negara+Berhasil+Disinkronisasi!');
@@ -101,7 +117,6 @@ export default createRoute(async (c) => {
         return acc
     }, {} as Record<string, {value: string, desc: string}>) || {}
 
-    // Hitung jumlah katalog di database lokal
     const totalServices = await db.prepare("SELECT COUNT(*) as total FROM nokos_services").first<{total: number}>();
     const totalCountries = await db.prepare("SELECT COUNT(*) as total FROM nokos_countries").first<{total: number}>();
 
@@ -127,7 +142,6 @@ export default createRoute(async (c) => {
                     </div>
                 )}
 
-                {/* BARU: Panel Sinkronisasi Nokos */}
                 <div class="bg-blue-50 rounded-2xl shadow-sm border border-blue-200 p-6 mb-8 flex flex-col md:flex-row items-center justify-between gap-4">
                     <div>
                         <h2 class="text-lg font-bold text-blue-900">Sinkronisasi Katalog Provider</h2>
