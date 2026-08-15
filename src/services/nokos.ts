@@ -40,6 +40,7 @@ export class NokosService {
         return res.data?.balance || res.balance || 0;
     }
 
+    // Parser Layanan
     async getServices(): Promise<{code: string, name: string}[]> {
         const res = await this.request('getServices');
         const rawServices = res.services || res.data || res;
@@ -53,7 +54,7 @@ export class NokosService {
         return [];
     }
 
-    // PARSER NEGARA SESUAI RAW DATA {"1": "Ukraine", "2": "Kazakhstan"}
+    // Parser Negara: Disesuaikan dengan raw data JSON {"1": "Ukraine", "2": "Kazakhstan"}
     async getCountries(): Promise<{id: number, name: string, prefix: string}[]> {
         const res = await this.request('getCountries');
         const rawCountries = res.countries || {};
@@ -64,21 +65,23 @@ export class NokosService {
             result = Object.entries(rawCountries).map(([id, name]) => ({
                 id: Number(id),
                 name: String(name),
-                prefix: '' // Raw data Nokos tidak memiliki prefix
+                prefix: '' // API raw data tidak menyediakan prefix
             }));
         }
 
         return result.filter(i => i.name !== '' && !isNaN(i.id));
     }
 
-    // PARSER HARGA SESUAI RAW DATA res.prices
-    async getPrices(server: string = 's2', service: string = '', country: string = ''): Promise<any> {
-        let url = `getPrices&server=${server}`;
-        if (service) url += `&service=${service}`;
-        if (country) url += `&country=${country}`;
-        
-        const res = await this.request(url);
+    // Mengambil harga secara Live (Parameter server opsional, default 's2')
+    async getPrices(service: string, country: string, server: string = 's2'): Promise<any> {
+        const res = await this.request(`getPrices&service=${service}&country=${country}&server=${server}`);
         return res.prices || res.data || {};
+    }
+
+    // Mengambil ketersediaan stok secara Live
+    async getAvailability(service: string, country: string, server: string = 's2'): Promise<{available: number, price: number}> {
+        const res = await this.request(`getAvailability&service=${service}&country=${country}&server=${server}`);
+        return res.data || res.availability || { available: 0, price: 0 };
     }
 
     async getNumber(service: string, country: string, server: string = 's2'): Promise<{ activation_id: number, phone: string, price: number }> {
