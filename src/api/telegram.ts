@@ -56,8 +56,9 @@ telegramRouter.post('/webhook', async (c) => {
     const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
     const globalQrisWebhook = (configs['qris_global_webhook'] || '').trim()
     
-    // AMBIL URL GATEWAY DINAMIS DARI DATABASE
+    // AMBIL VARIABEL DINAMIS DARI DATABASE
     const qrisGatewayUrl = (configs['qris_gateway_url'] || 'https://qrispay.pages.dev/api/trx').trim()
+    const promoChannel = (configs['promo_channel'] || '@InfoNokosMochi').trim()
     
     // Deteksi URL Otomatis untuk Webhook QRIS
     const reqUrl = new URL(c.req.url)
@@ -135,7 +136,6 @@ telegramRouter.post('/webhook', async (c) => {
                             webhook_url: finalWebhookUrl 
                         }
 
-                        // MENGGUNAKAN URL GATEWAY DARI DATABASE
                         const qrisCall = await fetch(qrisGatewayUrl, {
                             method: 'POST',
                             headers: {
@@ -449,7 +449,7 @@ telegramRouter.post('/webhook', async (c) => {
                           `<b>Bot Stats :</b>\n` +
                           `┗ <b>Total User :</b> ${statsRecord?.total || 1}\n\n` +
                           `<b>Info Promo :</b>\n` +
-                          `┗ <b>Channel :</b> @InfoNokosMochi\n\n` +
+                          `┗ <b>Channel :</b> ${promoChannel}\n\n` +
                           `<b>Shortcut :</b>\n` +
                           `┗ /start - Mulai Bot`
 
@@ -537,7 +537,6 @@ telegramRouter.post('/webhook', async (c) => {
             await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
                 .bind(orderId, String(chatId), amount).run()
 
-            // MENGGUNAKAN URL GATEWAY DARI DATABASE
             const qrisPayload: any = { 
                 order_id: orderId, 
                 amount: amount,
