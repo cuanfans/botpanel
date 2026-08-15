@@ -49,37 +49,14 @@ telegramRouter.post('/webhook', async (c) => {
         const data = cb.data
 
         if (data === 'menu_start') {
-            // Logika /start akan dipanggil di bawah (redirect)
             body.message = cb.message
             body.message.text = '/start'
             body.message.from = cb.from
         }
         else if (data === 'menu_deposit') {
-            // UI Sesuai Gambar: deposit.png
-            const textDeposit = `🧮 <b>PILIH NOMINAL DEPOSIT</b>\n\nSilakan pilih nominal deposit instan di bawah ini, atau gunakan Nominal Kustom:`
-            const keyboardDeposit = {
-                inline_keyboard: [
-                    [
-                        { text: "Rp 1.000", callback_data: "depo_1000" },
-                        { text: "Rp 5.000", callback_data: "depo_5000" }
-                    ],
-                    [
-                        { text: "Rp 10.000", callback_data: "depo_10000" },
-                        { text: "Rp 25.000", callback_data: "depo_25000" }
-                    ],
-                    [
-                        { text: "Rp 50.000", callback_data: "depo_50000" },
-                        { text: "Rp 100.000", callback_data: "depo_100000" }
-                    ],
-                    [
-                        { text: "🏷 Nominal Kustom", callback_data: "depo_custom" }
-                    ],
-                    [
-                        { text: "🔙 Kembali", callback_data: "menu_start" }
-                    ]
-                ]
-            }
-            await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit, messageId)
+            body.message = cb.message
+            body.message.text = '/deposit' // Redirect ke logika command teks di bawah
+            body.message.from = cb.from
         }
         else if (data.startsWith('depo_')) {
             const nominal = data.split('_')[1]
@@ -121,8 +98,9 @@ telegramRouter.post('/webhook', async (c) => {
             }
         }
         else if (data === 'menu_order') {
-            // Placeholder sebelum dilanjut ke pagination layanan
-            await sendTelegramMessage(botToken, chatId, `📚 Silakan gunakan format perintah untuk saat ini:\n<code>/beli [layanan] [negara]</code>\nContoh: <code>/beli wa 6</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId)
+            body.message = cb.message
+            body.message.text = '/order' // Redirect ke logika command teks di bawah
+            body.message.from = cb.from
         }
 
         // Hapus loading icon di tombol
@@ -132,7 +110,7 @@ telegramRouter.post('/webhook', async (c) => {
             body: JSON.stringify({ callback_query_id: cb.id })
         })
         
-        if (data !== 'menu_start') return c.text('OK')
+        if (data !== 'menu_start' && data !== 'menu_deposit' && data !== 'menu_order') return c.text('OK')
     }
 
     // ==========================================
@@ -144,6 +122,8 @@ telegramRouter.post('/webhook', async (c) => {
     const chatId = message.chat.id.toString()
     const username = message.from.username ? `@${message.from.username}` : (message.from.first_name || 'User')
     const text = message.text.trim()
+    const isFromCallback = !!body.callback_query
+    const messageIdToEdit = isFromCallback ? message.message_id : undefined
 
     // Daftar/Update User
     await c.env.DB.prepare(`
@@ -152,7 +132,7 @@ telegramRouter.post('/webhook', async (c) => {
         ON CONFLICT(telegram_id) DO UPDATE SET username = ?, updated_at = CURRENT_TIMESTAMP
     `).bind(chatId, username, username).run()
 
-    // --- Command: /start (UI Sesuai Gambar: start.png) ---
+    // --- Command: /start ---
     if (text === '/start') {
         const userRecord = await c.env.DB.prepare("SELECT balance FROM telegram_users WHERE telegram_id = ?").bind(chatId).first<{balance: number}>()
         const statsRecord = await c.env.DB.prepare("SELECT COUNT(*) as total FROM telegram_users").first<{total: number}>()
@@ -192,13 +172,64 @@ telegramRouter.post('/webhook', async (c) => {
                 [{ text: "📜 Syarat Ketentuan", callback_data: "menu_terms" }]
             ]
         }
-        
-        // Jika asalnya dari callback edit pesan, edit pesannya. Jika dari ketikan user, kirim pesan baru.
-        if (body.callback_query) {
-            await sendTelegramMessage(botToken, chatId, startText, startKeyboard, body.message.message_id)
-        } else {
-            await sendTelegramMessage(botToken, chatId, startText, startKeyboard)
+        await sendTelegramMessage(botToken, chatId, startText, startKeyboard, messageIdToEdit)
+        return c.text('OK')
+    }
+
+    // --- Command: /deposit (DIPERBAIKI) ---
+    if (text === '/deposit') {
+        const textDeposit = `🧮 <b>PILIH NOMINAL DEPOSIT</b>\n\nSilakan pilih nominal deposit instan di bawah ini, atau gunakan Nominal Kustom:`
+        const keyboardDeposit = {
+            inline_keyboard: [
+                [
+                    { text: "Rp 1.000", callback_data: "depo_1000" },
+                    { text: "Rp 5.000", callback_data: "depo_5000" }
+                ],
+                [
+                    { text: "Rp 10.000", callback_data: "depo_10000" },
+                    { text: "Rp 25.000", callback_data: "depo_25000" }
+                ],
+                [
+                    { text: "Rp 50.000", callback_data: "depo_50000" },
+                    { text: "Rp 100.000", callback_data: "depo_100000" }
+                ],
+                [
+                    { text: "🏷 Nominal Kustom", callback_data: "depo_custom" }
+                ],
+                [
+                    { text: "🔙 Kembali", callback_data: "menu_start" }
+                ]
+            ]
         }
+        await sendTelegramMessage(botToken, chatId, textDeposit, keyboardDeposit, messageIdToEdit)
+        return c.text('OK')
+    }
+
+    // --- Command: /order (DIPERBAIKI) ---
+    if (text === '/order') {
+        const textOrder = `📚 <b>PILIH LAYANAN OTP</b>\n\nSilakan pilih layanan yang ingin Anda beli:`
+        const keyboardOrder = {
+            inline_keyboard: [
+                [
+                    { text: "WhatsApp", callback_data: "cek_wa" },
+                    { text: "Telegram", callback_data: "cek_tg" }
+                ],
+                [
+                    { text: "Shopee", callback_data: "cek_shopee" },
+                    { text: "TikTok", callback_data: "cek_tiktok" }
+                ],
+                [
+                    { text: "🔙 Kembali", callback_data: "menu_start" }
+                ]
+            ]
+        }
+        await sendTelegramMessage(botToken, chatId, textOrder, keyboardOrder, messageIdToEdit)
+        return c.text('OK')
+    }
+
+    // --- Command: /otp (DIPERBAIKI) ---
+    if (text.startsWith('/otp')) {
+        await sendTelegramMessage(botToken, chatId, `Fitur cek OTP sedang disiapkan.`)
         return c.text('OK')
     }
 
@@ -224,6 +255,67 @@ telegramRouter.post('/webhook', async (c) => {
         } else {
             await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> ${qrisRes.error}`)
         }
+        return c.text('OK')
+    }
+
+    // --- Command Transaksi Lanjutan (/beli wa 6) ---
+    if (text.startsWith('/beli')) {
+        const parts = text.split(' ')
+        if (parts.length < 3) {
+            await sendTelegramMessage(botToken, chatId, "Format salah. Gunakan: <code>/beli [layanan] [negara]</code>\nContoh: <code>/beli wa 6</code>")
+            return c.text('OK')
+        }
+
+        const serviceCode = parts[1].toLowerCase()
+        const countryCode = parts[2]
+        
+        try {
+            const nokos = new NokosService(nokosApiKey)
+            const providerData = await nokos.getPrices(serviceCode, countryCode, 's2')
+            const exchangeRate = Number(configs['nokos_exchange_rate'] || 17900)
+            
+            const pricesObj = providerData[countryCode] || providerData
+            const serviceData = pricesObj[serviceCode]
+
+            if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
+                await sendTelegramMessage(botToken, chatId, "❌ Layanan atau negara tidak tersedia/kosong stoknya.")
+                return c.text('OK')
+            }
+            
+            const rawCost = Number(serviceData.cost ?? serviceData.price ?? 0)
+            const costIDR = rawCost * exchangeRate 
+            
+            const { finalPrice, markupApplied } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryCode)
+            const trxId = `TRX-${Date.now()}`
+
+            await atomicPurchase(c.env.DB, chatId, finalPrice, serviceCode, countryCode, trxId)
+            await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${serviceCode.toUpperCase()}</b>\nSaldo dipotong: Rp ${finalPrice.toLocaleString('id-ID')}`)
+
+            const order = await nokos.getNumber(serviceCode, countryCode, 's2')
+
+            await c.env.DB.prepare(`
+                UPDATE transactions 
+                SET status = 'success', nokos_activation_id = ?, phone_number = ?, provider_cost = ?, markup_applied = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE transaction_id = ?
+            `).bind(order.activation_id, order.phone, costIDR, markupApplied, trxId).run()
+
+            await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${order.phone}</code>\n🔖 ID Aktivasi: ${order.activation_id}\n\n<i>Ketik <code>/otp ${order.activation_id}</code> untuk mengecek SMS yang masuk.</i>`)
+
+        } catch (error: any) {
+            if (error.message !== "Saldo tidak mencukupi atau transaksi gagal") {
+                await c.env.DB.prepare(`
+                    UPDATE telegram_users SET balance = balance + (
+                        SELECT final_price FROM transactions WHERE transaction_id = ?
+                    ) WHERE telegram_id = ?
+                `).bind(trxId, chatId).run() 
+                
+                await c.env.DB.prepare(`
+                    UPDATE transactions SET status = 'failed' WHERE transaction_id = ?
+                `).bind(trxId).run()
+            }
+            await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${error.message}`)
+        }
+        
         return c.text('OK')
     }
 
