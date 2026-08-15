@@ -1,0 +1,16 @@
+name = "telegram-bot-panel"
+compatibility_date = "2026-08-15"
+compatibility_flags = [ "nodejs_compat" ]
+
+# Titik masuk utama
+main = "src/index.ts"
+
+# Pengaturan Assets untuk file statis (HonoX)
+[site]
+bucket = "./public"
+
+# Binding Database D1
+[[d1_databases]]
+binding = "DB"
+database_name = "bot_panel_db"
+database_id = "MASUKKAN_DATABASE_ID_ANDA_DI_SINI"
