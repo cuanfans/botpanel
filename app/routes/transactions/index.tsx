@@ -1,10 +1,9 @@
-import type { Context } from 'hono'
+import { createRoute } from 'honox/factory'
 import { Sidebar } from '../../components/Sidebar'
 
-export default async function Transactions(c: Context) {
+export default createRoute(async (c) => {
     const db = c.env.DB as D1Database
     
-    // Join transaksi dengan user untuk menampilkan username, ambil 100 terakhir
     const query = `
         SELECT t.transaction_id, t.telegram_id, u.username, t.service_code, t.country_code, 
                t.provider_cost, t.markup_applied, t.final_price, t.status, t.created_at 
@@ -18,7 +17,7 @@ export default async function Transactions(c: Context) {
         markup_applied: number, final_price: number, status: string, created_at: string
     }>()
 
-    return (
+    return c.render(
         <div class="flex h-screen bg-gray-100 font-sans overflow-hidden">
             <Sidebar activePath="/transactions" />
             
@@ -73,4 +72,4 @@ export default async function Transactions(c: Context) {
             </main>
         </div>
     )
-}
+})
