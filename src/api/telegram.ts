@@ -5,8 +5,8 @@ import { NokosService } from '../services/nokos'
 
 export const telegramRouter = new Hono<{ Bindings: { DB: D1Database } }>()
 
-// Helper kirim pesan Telegram
-async function sendTelegramMessage(botToken: string, chatId: string | number, text: string, replyMarkup?: any, messageIdToEdit?: number) {
+// Helper kirim pesan Telegram (Error tidak lagi ditelan)
+async function sendTelegramMessage(botToken: string, chatId: string | number, text: string, replyMarkup?: any, messageIdToEdit?: number, useHtml: boolean = true) {
     const url = messageIdToEdit 
         ? `https://api.telegram.org/bot${botToken}/editMessageText`
         : `https://api.telegram.org/bot${botToken}/sendMessage`
@@ -14,18 +14,25 @@ async function sendTelegramMessage(botToken: string, chatId: string | number, te
     const payload: any = {
         chat_id: chatId,
         text: text,
-        parse_mode: 'HTML',
     }
+    
+    if (useHtml) payload.parse_mode = 'HTML';
     if (messageIdToEdit) payload.message_id = messageIdToEdit
     if (replyMarkup) payload.reply_markup = replyMarkup
 
-    await fetch(url, {
+    const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-    }).catch(() => {}) 
+    });
+    
+    if (!res.ok) {
+        const errBody = await res.text();
+        console.error(`Gagal Kirim Telegram: ${errBody}`);
+    }
 }
 
+// Helper Bendera Negara
 function getFlagEmoji(countryName: string): string {
     const flags: Record<string, string> = {
         'Indonesia': '🇮🇩', 'USA': '🇺🇸', 'United Kingdom': '🇬🇧', 'Philippines': '🇵🇭', 
@@ -37,6 +44,19 @@ function getFlagEmoji(countryName: string): string {
         if (countryName.toLowerCase().includes(key.toLowerCase())) return flag
     }
     return '🏳️'
+}
+
+// Helper Pembersih HTML
+function escapeHtml(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Helper Pembersih URL (Anti Bot Crash)
+function sanitizeUrl(url: string): string {
+    let safeUrl = url.trim();
+    if (safeUrl.startsWith('@')) return `https://t.me/${safeUrl.substring(1)}`;
+    if (!safeUrl.startsWith('http')) return `https://${safeUrl}`;
+    return safeUrl;
 }
 
 // ==========================================
@@ -53,13 +73,13 @@ async function showStartMenu(db: D1Database, botToken: string, chatId: string, u
     const startText = `🤖 <b>BotPanel PRO</b>\n${dateStr} pukul ${timeStr} WIB\n\n` +
                       `<b>User Info :</b>\n` +
                       `┣ <b>ID :</b> <code>${chatId}</code>\n` +
-                      `┗ <b>Username :</b> ${username}\n\n` +
+                      `┗ <b>Username :</b> ${escapeHtml(username)}\n\n` +
                       `<b>Balance Info :</b>\n` +
                       `┗ <b>Balance :</b> Rp ${(userRecord?.balance || 0).toLocaleString('id-ID')}\n\n` +
                       `<b>Bot Stats :</b>\n` +
                       `┗ <b>Total User :</b> ${statsRecord?.total || 1}\n\n` +
                       `<b>Info Promo :</b>\n` +
-                      `┗ <b>Channel :</b> ${promoChannel}\n\n` +
+                      `┗ <b>Channel :</b> ${escapeHtml(promoChannel)}\n\n` +
                       `<b>Shortcut :</b>\n` +
                       `┗ /start - Mulai Bot`
 
@@ -76,7 +96,7 @@ async function showStartMenu(db: D1Database, botToken: string, chatId: string, u
             ],
             [
                 { text: "🎁 Referral", callback_data: "menu_referral" },
-                { text: "🎧 Contact CS", url: contactCs }
+                { text: "🎧 Contact CS", url: sanitizeUrl(contactCs) }
             ],
             [{ text: "📜 Syarat Ketentuan", callback_data: "menu_terms" }]
         ]
@@ -133,7 +153,7 @@ telegramRouter.post('/webhook', async (c) => {
         acc[curr.config_key] = curr.config_value; return acc
     }, {} as Record<string, string>) || {}
 
-    const botToken = configs['bot_token']
+    const botToken = (configs['bot_token'] || '').trim()
     const nokosApiKey = configs['nokos_api_key']
     const rawQrisKey = configs['qris_api_key'] || ''
     const qrisApiKey = rawQrisKey.replace(/^Bearer\s+/i, '').trim()
@@ -160,7 +180,6 @@ telegramRouter.post('/webhook', async (c) => {
         const username = cb.from.username ? `@${cb.from.username}` : (cb.from.first_name || 'User')
         let data = cb.data
 
-        // Balas cepat agar tidak loading, berikan popup alert khusus jika menu referral
         const isReferral = data === 'menu_referral';
         c.executionCtx.waitUntil(
             fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
@@ -170,13 +189,12 @@ telegramRouter.post('/webhook', async (c) => {
                     text: isReferral ? "Fitur Referral sedang dikembangkan. Mohon bersabar!" : undefined,
                     show_alert: isReferral
                 })
-            })
+            }).catch(() => {})
         )
 
         if (isReferral) return c.text('OK');
 
         try {
-            // 1. MENU UTAMA, DEPOSIT & STATIC PAGES
             if (data === 'menu_start') {
                 await showStartMenu(c.env.DB, botToken, String(chatId), username, promoChannel, contactCs, messageId);
             }
@@ -198,10 +216,9 @@ telegramRouter.post('/webhook', async (c) => {
                 await sendTelegramMessage(botToken, chatId, helpText, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
             }
             else if (data === 'menu_terms') {
-                const termsMsg = `📜 <b>SYARAT & KETENTUAN</b>\n\n${termsText}`;
+                const termsMsg = `📜 <b>SYARAT & KETENTUAN</b>\n\n${escapeHtml(termsText)}`;
                 await sendTelegramMessage(botToken, chatId, termsMsg, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
             }
-            // HISTORI ORDER
             else if (data === 'menu_history_order') {
                 const txs = await c.env.DB.prepare("SELECT service_code, phone_number, final_price, status, created_at FROM transactions WHERE telegram_id = ? ORDER BY id DESC LIMIT 5").bind(String(chatId)).all<any>();
                 let text = `🧾 <b>5 HISTORI ORDER TERAKHIR</b>\n\n`;
@@ -210,14 +227,13 @@ telegramRouter.post('/webhook', async (c) => {
                 } else {
                     txs.results.forEach((tx, i) => {
                         const icon = tx.status === 'success' ? '✅' : (tx.status === 'failed' || tx.status === 'refunded' ? '❌' : '⏳');
-                        text += `${i+1}. <b>${tx.service_code.toUpperCase()}</b> - <code>${tx.phone_number || 'N/A'}</code>\n` +
+                        text += `${i+1}. <b>${escapeHtml(tx.service_code.toUpperCase())}</b> - <code>${escapeHtml(tx.phone_number || 'N/A')}</code>\n` +
                                 `   Harga: Rp ${tx.final_price.toLocaleString('id-ID')} | Status: ${icon} ${tx.status}\n` +
                                 `   Waktu: ${new Date(tx.created_at).toLocaleString('id-ID')}\n\n`;
                     });
                 }
                 await sendTelegramMessage(botToken, chatId, text, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
             }
-            // HISTORI DEPOSIT
             else if (data === 'menu_history_deposit') {
                 const depos = await c.env.DB.prepare("SELECT amount, status, created_at FROM deposits WHERE telegram_id = ? ORDER BY id DESC LIMIT 5").bind(String(chatId)).all<any>();
                 let text = `🧾 <b>5 HISTORI DEPOSIT TERAKHIR</b>\n\n`;
@@ -233,8 +249,6 @@ telegramRouter.post('/webhook', async (c) => {
                 }
                 await sendTelegramMessage(botToken, chatId, text, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_start" }]] }, messageId);
             }
-            
-            // 2. PROSES DEPOSIT 
             else if (data.startsWith('depo_')) {
                 const nominal = data.split('_')[1]
                 if (nominal === 'custom') {
@@ -269,7 +283,7 @@ telegramRouter.post('/webhook', async (c) => {
                         try {
                             qrisRes = JSON.parse(rawQrisResponse)
                         } catch (e) {
-                            throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawQrisResponse.substring(0, 150)}</code>`)
+                            throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n${rawQrisResponse.substring(0, 150)}`)
                         }
 
                         if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
@@ -287,7 +301,7 @@ telegramRouter.post('/webhook', async (c) => {
                                                 `⏳ Saldo otomatis masuk 1-2 detik setelah lunas.`;
 
                             const inline_keyboard = [];
-                            if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
+                            if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: sanitizeUrl(finalUrl) }]);
                             inline_keyboard.push([{ text: "🔙 Kembali", callback_data: "menu_deposit" }]);
                             const payBtn = { inline_keyboard };
 
@@ -300,22 +314,20 @@ telegramRouter.post('/webhook', async (c) => {
                                 await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
                                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ chat_id: chatId, photo: qrImageUrl, caption: successText, reply_markup: payBtn, parse_mode: 'HTML' })
-                                });
+                                }).catch(() => {});
                             } else {
                                 await sendTelegramMessage(botToken, chatId, successText, payBtn, messageId)
                             }
                         } else {
                             await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
                             const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
-                            await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b>\n<code>${errMsg}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
+                            await sendTelegramMessage(botToken, chatId, `❌ <b>Gateway Error:</b>\n<code>${escapeHtml(errMsg)}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
                         }
                     } catch (err: any) {
-                        await sendTelegramMessage(botToken, chatId, `❌ <b>Sistem Error:</b>\n<code>${err.message}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `❌ <b>Sistem Error:</b>\n<code>${escapeHtml(err.message)}</code>`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: "menu_deposit" }]] }, messageId)
                     }
                 }
             }
-            
-            // 3. PAGINATION LAYANAN
             else if (data.startsWith('srv_')) {
                 const parts = data.split('_')
                 const server = parts[1] || 's2'
@@ -371,8 +383,6 @@ telegramRouter.post('/webhook', async (c) => {
                 const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\n💻 <b>Server :</b> ${server === 's1' ? 'Server 1 (Express)' : 'Server 2 (Premium)'}\n\nNomor OTP Indonesia dan Internasional dengan kualitas premium dan stok melimpah.\n\n<i>Silakan pilih layanan:</i>`
                 await sendTelegramMessage(botToken, chatId, srvText, { inline_keyboard }, messageId)
             }
-            
-            // 4. PAGINATION NEGARA
             else if (data.startsWith('sv_') || data.startsWith('cty_')) {
                 const parts = data.split('_')
                 const isCtyNav = parts[0] === 'cty'
@@ -422,11 +432,12 @@ telegramRouter.post('/webhook', async (c) => {
                     { text: "🔙 Kembali", callback_data: `srv_${server}_1` },
                 ])
                 
-                const ctyText = `✨ <b>PILIH NEGARA: ${srvName.toUpperCase()}</b> (Hal. ${page})\n\nMenampilkan ${totalCty?.t || 0} negara yang memiliki stok ketersediaan saat ini:\n\n<i>Pilih negara tujuan Anda:</i>`
+                const ctyText = `✨ <b>PILIH NEGARA: ${escapeHtml(srvName.toUpperCase())}</b> (Hal. ${page})\n\nMenampilkan ${totalCty?.t || 0} negara yang memiliki stok ketersediaan saat ini:\n\n<i>Pilih negara tujuan Anda:</i>`
                 await sendTelegramMessage(botToken, chatId, ctyText, { inline_keyboard }, messageId)
             }
-
-            // 5. CEK HARGA NOKOS
+            // ==========================================
+            // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR
+            // ==========================================
             else if (data.startsWith('ct_')) {
                 const parts = data.split('_')
                 const server = parts[1]
@@ -446,7 +457,7 @@ telegramRouter.post('/webhook', async (c) => {
                     const serviceData = pricesObj[serviceCode]
 
                     if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
-                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${srvName}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${escapeHtml(srvName)}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                     } else {
                         let priceOptions = []
                         if (serviceData.cost !== undefined || serviceData.price !== undefined) {
@@ -468,21 +479,25 @@ telegramRouter.post('/webhook', async (c) => {
                             
                             const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId)
                             
-                            row.push({ text: `Rp. ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}` })
+                            // FORMAT TOMBOL: TAMPILKAN NAMA OPERATOR AGAR BISA MEMBEDAKAN 10+ HARGA
+                            let btnText = `Rp ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`
+                            if (opt.operator && opt.operator.toLowerCase() !== 'any' && opt.operator.toLowerCase() !== 'random') {
+                                btnText = `${opt.operator.toUpperCase()} : Rp ${finalPrice.toLocaleString('id-ID')} (${stock})`
+                            }
+                            
+                            row.push({ text: btnText, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}` })
                             if(row.length === 2) { inline_keyboard.push(row); row = []; }
                         }
                         if(row.length > 0) inline_keyboard.push(row)
 
                         inline_keyboard.push([{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }])
 
-                        await sendTelegramMessage(botToken, chatId, `✨ <b>LAYANAN TERPILIH: ${srvName.toUpperCase()}</b>\n\nBerikut adalah pilihan harga yang tersedia saat ini untuk negara yang Anda pilih:\n\n<i>Pilih harga yang menurut Anda paling stabil:</i>`, { inline_keyboard }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `✨ <b>LAYANAN TERPILIH: ${escapeHtml(srvName.toUpperCase())}</b>\n\nBerikut adalah pilihan harga yang tersedia saat ini untuk negara yang Anda pilih:\n\n<i>Pilih harga yang menurut Anda paling stabil:</i>`, { inline_keyboard }, messageId)
                     }
                 } catch (e: any) {
-                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${e.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
+                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${escapeHtml(e.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                 }
             }
-
-            // 6. PROSES PEMBELIAN ATOMIK
             else if (data.startsWith('buy_')) {
                 const parts = data.split('_')
                 const server = parts[1]
@@ -493,7 +508,7 @@ telegramRouter.post('/webhook', async (c) => {
 
                 try {
                     await atomicPurchase(c.env.DB, String(chatId), expectedPrice, serviceCode, countryId, trxId)
-                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${serviceCode.toUpperCase()}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
+                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${escapeHtml(serviceCode.toUpperCase())}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
 
                     const nokos = new NokosService(nokosApiKey)
                     const order = await nokos.getNumber(serviceCode, countryId, server)
@@ -506,18 +521,18 @@ telegramRouter.post('/webhook', async (c) => {
                         WHERE transaction_id = ?
                     `).bind(order.activation_id, order.phone, order.price, markupApplied, trxId).run()
 
-                    await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${order.phone}</code>\n🔖 ID Aktivasi: ${order.activation_id}\n\n<i>Ketik <code>/otp ${order.activation_id}</code> untuk mengecek SMS yang masuk.</i>`, undefined, messageId)
+                    await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${escapeHtml(order.phone)}</code>\n🔖 ID Aktivasi: ${escapeHtml(order.activation_id)}\n\n<i>Ketik <code>/otp ${escapeHtml(order.activation_id)}</code> untuk mengecek SMS yang masuk.</i>`, undefined, messageId)
 
                 } catch (error: any) {
                     if (error.message !== "Saldo tidak mencukupi atau transaksi gagal") {
                         await c.env.DB.prepare(`UPDATE telegram_users SET balance = balance + (SELECT final_price FROM transactions WHERE transaction_id = ?) WHERE telegram_id = ?`).bind(trxId, String(chatId)).run() 
                         await c.env.DB.prepare(`UPDATE transactions SET status = 'failed' WHERE transaction_id = ?`).bind(trxId).run()
                     }
-                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${error.message}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct_${server}_${serviceCode}_${countryId}` }]] }, messageId)
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${escapeHtml(error.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct_${server}_${serviceCode}_${countryId}` }]] }, messageId)
                 }
             }
         } catch (err: any) {
-            console.error(err)
+            console.error(`Sistem Error (Callback): ${err.message}`)
         }
         
         return c.text('OK')
@@ -532,144 +547,182 @@ telegramRouter.post('/webhook', async (c) => {
     const chatId = message.chat.id.toString()
     const username = message.from.username ? `@${message.from.username}` : (message.from.first_name || 'User')
     const text = message.text.trim()
+    
+    // Pecah text untuk mengatasi autocompletion yang mengikutkan nama bot (misal: /start@namabot)
+    const command = text.split('@')[0].split(' ')[0].toLowerCase()
 
-    await c.env.DB.prepare(`
-        INSERT INTO telegram_users (telegram_id, username, balance) 
-        VALUES (?, ?, 0) 
-        ON CONFLICT(telegram_id) DO UPDATE SET username = ?, updated_at = CURRENT_TIMESTAMP
-    `).bind(chatId, username, username).run()
+    try {
+        await c.env.DB.prepare(`
+            INSERT INTO telegram_users (telegram_id, username, balance) 
+            VALUES (?, ?, 0) 
+            ON CONFLICT(telegram_id) DO UPDATE SET username = ?, updated_at = CURRENT_TIMESTAMP
+        `).bind(chatId, username, username).run()
 
-    // --- Command: /start ---
-    if (text === '/start') {
-        await showStartMenu(c.env.DB, botToken, chatId, username, promoChannel, contactCs);
-        return c.text('OK');
-    }
+        if (command === '/start') {
+            await showStartMenu(c.env.DB, botToken, chatId, username, promoChannel, contactCs);
+            return c.text('OK');
+        }
 
-    // --- Command: /deposit ---
-    if (text === '/deposit') {
-        await showDepositMenu(botToken, chatId);
-        return c.text('OK');
-    }
+        if (command === '/deposit') {
+            await showDepositMenu(botToken, chatId);
+            return c.text('OK');
+        }
 
-    // --- Command: /order ---
-    if (text === '/order') {
-        await showOrderMenu(botToken, chatId);
-        return c.text('OK');
-    }
+        if (command === '/order') {
+            await showOrderMenu(botToken, chatId);
+            return c.text('OK');
+        }
 
-    // --- Command: /otp <id> ---
-    if (text.startsWith('/otp ')) {
-        const actId = text.split(' ')[1];
-        if (!actId) return c.text('OK');
-        try {
-            const nokos = new NokosService(nokosApiKey);
-            const status = await nokos.getStatus(actId);
-            
-            let msg = ``;
-            if (status.status === 'STATUS_WAIT_CODE') {
-                msg = `⏳ Menunggu SMS masuk untuk ID <code>${actId}</code>...\n\nSilakan tunggu beberapa saat dan ketik <code>/otp ${actId}</code> kembali.`;
-            } else if (status.status === 'STATUS_OK') {
-                msg = `📩 <b>SMS MASUK!</b>\n\nKode/SMS: <code>${status.sms || status.code}</code>\n\nSisa saldo Anda telah disesuaikan.`;
-            } else if (status.status === 'STATUS_CANCEL') {
-                msg = `❌ Transaksi dibatalkan atau kadaluarsa. Jika saldo Anda terpotong, silakan hubungi admin.`;
-            } else {
-                msg = `Status Aktivasi: ${status.status}`;
+        if (command === '/otp') {
+            const actId = text.split(' ')[1];
+            if (!actId) {
+                await sendTelegramMessage(botToken, chatId, "❌ Format salah. Gunakan: <code>/otp ID_AKTIVASI</code>");
+                return c.text('OK');
             }
-            await sendTelegramMessage(botToken, chatId, msg);
-        } catch (e: any) {
-            await sendTelegramMessage(botToken, chatId, `❌ Gagal cek status: ${e.message}`);
-        }
-        return c.text('OK');
-    }
-
-    // --- Command: /depo <nominal> ---
-    if (text.startsWith('/depo ')) {
-        const amount = Math.floor(Number(text.split(' ')[1]))
-        if (isNaN(amount) || amount < 1000 || amount > 499999) {
-            await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Minimal Rp 1.000 dan Maksimal Rp 499.999.\nContoh: <code>/depo 15000</code>")
-            return c.text('OK')
-        }
-
-        if (!qrisApiKey) {
-            await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay belum dikonfigurasi.`)
-            return c.text('OK')
-        }
-
-        const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
-        
-        try {
-            await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
-                .bind(orderId, String(chatId), amount).run()
-
-            const qrisPayload: any = { 
-                order_id: orderId, 
-                amount: amount,
-                webhook_url: finalWebhookUrl 
-            }
-
-            const qrisCall = await fetch(qrisGatewayUrl, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${qrisApiKey}`,
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'User-Agent': 'Cloudflare-Worker'
-                },
-                body: JSON.stringify(qrisPayload)
-            })
-            
-            const rawResponse = await qrisCall.text()
-            let qrisRes;
             try {
-                qrisRes = JSON.parse(rawResponse)
-            } catch (e) {
-                 throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n<code>${rawResponse.substring(0, 150)}</code>`)
+                const nokos = new NokosService(nokosApiKey);
+                const status = await nokos.getStatus(actId);
+                
+                let msg = ``;
+                if (status.status === 'STATUS_WAIT_CODE') {
+                    msg = `⏳ Menunggu SMS masuk untuk ID <code>${escapeHtml(actId)}</code>...\n\nSilakan tunggu beberapa saat dan ketik <code>/otp ${escapeHtml(actId)}</code> kembali.`;
+                } else if (status.status === 'STATUS_OK') {
+                    msg = `📩 <b>SMS MASUK!</b>\n\nKode/SMS: <code>${escapeHtml(status.sms || status.code)}</code>\n\nSisa saldo Anda telah disesuaikan.`;
+                } else if (status.status === 'STATUS_CANCEL') {
+                    msg = `❌ Transaksi dibatalkan atau kadaluarsa. Jika saldo Anda terpotong, silakan hubungi admin.`;
+                } else {
+                    msg = `Status Aktivasi: ${escapeHtml(status.status)}`;
+                }
+                await sendTelegramMessage(botToken, chatId, msg);
+            } catch (e: any) {
+                await sendTelegramMessage(botToken, chatId, `❌ Gagal cek status: ${escapeHtml(e.message)}`);
+            }
+            return c.text('OK');
+        }
+
+        if (command === '/cari') {
+            const keyword = text.substring(5).trim();
+            
+            if (!keyword) {
+                const searchGuide = `🔍 <b>CARA MENCARI LAYANAN</b>\n\nKetik perintah diikuti nama layanan yang dicari.\n\nContoh:\n<code>/cari whatsapp</code>\n<code>/cari telegram</code>\n<code>/cari facebook</code>`;
+                await sendTelegramMessage(botToken, chatId, searchGuide);
+                return c.text('OK');
             }
 
-            if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
-                const finalUrl = qrisRes.paylink || qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
-                const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
-                
-                const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
-                await c.env.DB.prepare(`UPDATE deposits SET qris_url = ?, webhook_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', finalWebhookUrl, orderId).run()
+            const searchResults = await c.env.DB.prepare(`SELECT code, name FROM nokos_services WHERE name LIKE ? LIMIT 20`).bind(`%${keyword}%`).all<{code: string, name: string}>();
 
-                const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
-                                    `<b>Order ID:</b> <code>${orderId}</code>\n`+
-                                    `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
-                                    `📸 <b>Instruksi Pembayaran:</b>\n`+
-                                    `Silakan screenshot atau simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
-                                    `⏳ Saldo otomatis masuk 1-2 detik setelah lunas.`;
+            if (!searchResults.results || searchResults.results.length === 0) {
+                await sendTelegramMessage(botToken, chatId, `❌ Layanan <b>${escapeHtml(keyword)}</b> tidak ditemukan. Silakan coba kata kunci lain.`);
+                return c.text('OK');
+            }
 
-                const inline_keyboard = [];
-                if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: finalUrl }]);
-                const payBtn = { inline_keyboard };
+            let textMsg = `🔍 <b>HASIL PENCARIAN: ${escapeHtml(keyword.toUpperCase())}</b>\n\n<i>Pilih layanan di bawah ini (Otomatis Server 2 / Premium):</i>`;
+            const inline_keyboard = [];
+            let row = [];
 
-                if (qrImageUrl) {
-                    await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            chat_id: chatId,
-                            photo: qrImageUrl,
-                            caption: successText,
-                            reply_markup: inline_keyboard.length > 0 ? payBtn : undefined,
-                            parse_mode: 'HTML'
-                        })
-                    });
-                } else {
-                    await sendTelegramMessage(botToken, chatId, successText, inline_keyboard.length > 0 ? payBtn : undefined);
+            for (let i = 0; i < searchResults.results.length; i++) {
+                const srv = searchResults.results[i];
+                row.push({ text: srv.name, callback_data: `sv_s2_${srv.code}` });
+                if (row.length === 2) { inline_keyboard.push(row); row = []; }
+            }
+            if (row.length > 0) inline_keyboard.push(row);
+
+            inline_keyboard.push([{ text: "🔙 Kembali ke Menu Order", callback_data: "menu_order" }]);
+
+            await sendTelegramMessage(botToken, chatId, textMsg, { inline_keyboard });
+            return c.text('OK');
+        }
+
+        if (command === '/depo') {
+            const amount = Math.floor(Number(text.split(' ')[1]))
+            if (isNaN(amount) || amount < 1000 || amount > 499999) {
+                await sendTelegramMessage(botToken, chatId, "❌ Nominal tidak valid. Minimal Rp 1.000 dan Maksimal Rp 499.999.\nContoh: <code>/depo 15000</code>")
+                return c.text('OK')
+            }
+
+            if (!qrisApiKey) {
+                await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal:</b> API Key Gopay belum dikonfigurasi.`)
+                return c.text('OK')
+            }
+
+            const orderId = `INV-${Date.now()}-${Math.floor(Math.random() * 1000)}`
+            
+            try {
+                await c.env.DB.prepare(`INSERT INTO deposits (order_id, telegram_id, amount, status) VALUES (?, ?, ?, 'pending')`)
+                    .bind(orderId, String(chatId), amount).run()
+
+                const qrisPayload: any = { 
+                    order_id: orderId, 
+                    amount: amount,
+                    webhook_url: finalWebhookUrl 
                 }
 
-            } else {
-                await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
-                const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
-                await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal dari Gateway:</b>\n<code>${errMsg}</code>`)
+                const qrisCall = await fetch(qrisGatewayUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${qrisApiKey}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'User-Agent': 'Cloudflare-Worker'
+                    },
+                    body: JSON.stringify(qrisPayload)
+                })
+                
+                const rawResponse = await qrisCall.text()
+                let qrisRes;
+                try {
+                    qrisRes = JSON.parse(rawResponse)
+                } catch (e) {
+                     throw new Error(`Invalid Gateway Response (HTTP ${qrisCall.status}):\n${rawResponse.substring(0, 150)}`)
+                }
+
+                if (qrisCall.ok && (qrisRes.status === 'success' || qrisRes.paylink || qrisRes.qris_url || qrisRes.raw_qris)) {
+                    const finalUrl = qrisRes.paylink || qrisRes.qris_url || qrisRes.checkout_url || qrisRes.data?.qris_url;
+                    const rawQris = qrisRes.raw_qris || qrisRes.data?.raw_qris;
+                    
+                    const qrImageUrl = rawQris ? `https://quickchart.io/qr?text=${encodeURIComponent(rawQris)}&size=300&margin=2` : null;
+                    await c.env.DB.prepare(`UPDATE deposits SET qris_url = ?, webhook_url = ? WHERE order_id = ?`).bind(finalUrl || qrImageUrl || '', finalWebhookUrl, orderId).run()
+
+                    const successText = `✅ <b>INVOICE DIBUAT</b>\n\n`+
+                                        `<b>Order ID:</b> <code>${orderId}</code>\n`+
+                                        `<b>Nominal:</b> Rp ${amount.toLocaleString('id-ID')}\n\n`+
+                                        `📸 <b>Instruksi Pembayaran:</b>\n`+
+                                        `Silakan screenshot atau simpan gambar QRIS ini, lalu scan menggunakan aplikasi e-wallet (DANA, GoPay, ShopeePay, OVO) atau Mobile Banking Anda.\n\n`+
+                                        `⏳ Saldo akan masuk otomatis 1-2 detik setelah lunas.`;
+
+                    const inline_keyboard = [];
+                    if (finalUrl) inline_keyboard.push([{ text: "💳 Buka Halaman Bayar", url: sanitizeUrl(finalUrl) }]);
+                    const payBtn = { inline_keyboard };
+
+                    if (qrImageUrl) {
+                        await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                chat_id: chatId,
+                                photo: qrImageUrl,
+                                caption: successText,
+                                reply_markup: inline_keyboard.length > 0 ? payBtn : undefined,
+                                parse_mode: 'HTML'
+                            })
+                        }).catch(() => {});
+                    } else {
+                        await sendTelegramMessage(botToken, chatId, successText, inline_keyboard.length > 0 ? payBtn : undefined);
+                    }
+
+                } else {
+                    await c.env.DB.prepare("UPDATE deposits SET status = 'failed' WHERE order_id = ?").bind(orderId).run()
+                    const errMsg = qrisRes.error || qrisRes.message || JSON.stringify(qrisRes)
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>Gagal dari Gateway:</b>\n<code>${escapeHtml(errMsg)}</code>`)
+                }
+            } catch (err: any) {
+                await sendTelegramMessage(botToken, chatId, `❌ <b>Error:</b>\n<code>${escapeHtml(err.message)}</code>`)
             }
-        } catch (err: any) {
-            await sendTelegramMessage(botToken, chatId, `❌ <b>Error:</b>\n<code>${err.message}</code>`)
+            
+            return c.text('OK')
         }
-        
-        return c.text('OK')
+    } catch (e: any) {
+        console.error(`Sistem Error (Command): ${e.message}`)
     }
 
     return c.text('OK')
