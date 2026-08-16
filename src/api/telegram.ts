@@ -367,7 +367,8 @@ telegramRouter.post('/webhook', async (c) => {
                     if(srvs[i].code === 'go') name = 'Google/Gmail/YT'
                     if(srvs[i].code === 'ot') name = 'Any Other'
                     
-                    row.push({ text: name, callback_data: `sv_${server}_${srvs[i].code}` })
+                    // PEMISAH DIRUBAH KE |
+                    row.push({ text: name, callback_data: `sv|${server}|${srvs[i].code}` })
                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
                 }
                 if(row.length > 0) inline_keyboard.push(row)
@@ -386,8 +387,8 @@ telegramRouter.post('/webhook', async (c) => {
                 const srvText = `📚 <b>PILIH LAYANAN OTP</b>\n\n💻 <b>Server :</b> ${server === 's1' ? 'Server 1 (Express)' : 'Server 2 (Premium)'}\n\nNomor OTP Indonesia dan Internasional dengan kualitas premium dan stok melimpah.\n\n<i>Silakan pilih layanan:</i>`
                 await sendTelegramMessage(botToken, chatId, srvText, { inline_keyboard }, messageId)
             }
-            else if (data.startsWith('sv_') || data.startsWith('cty_')) {
-                const parts = data.split('_')
+            else if (data.startsWith('sv|') || data.startsWith('cty|')) {
+                const parts = data.split('|')
                 const isCtyNav = parts[0] === 'cty'
                 const server = parts[1]
                 const serviceCode = parts[2]
@@ -420,15 +421,16 @@ telegramRouter.post('/webhook', async (c) => {
                 let row = []
                 for(let i = 0; i < ctys.length; i++){
                     const cty = ctys[i]
-                    row.push({ text: `${getFlagEmoji(cty.name)} ${cty.name}`, callback_data: `ct_${server}_${serviceCode}_${cty.id}` })
+                    // PEMISAH DIRUBAH KE |
+                    row.push({ text: `${getFlagEmoji(cty.name)} ${cty.name}`, callback_data: `ct|${server}|${serviceCode}|${cty.id}` })
                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
                 }
                 if(row.length > 0) inline_keyboard.push(row)
                 
                 const navRow = []
-                if(page > 1) navRow.push({ text: "◀️ Prev", callback_data: `cty_${server}_${serviceCode}_${page-1}` })
+                if(page > 1) navRow.push({ text: "◀️ Prev", callback_data: `cty|${server}|${serviceCode}|${page-1}` })
                 navRow.push({ text: `${page}/${maxPage}`, callback_data: "ignore" })
-                if(page < maxPage) navRow.push({ text: "Next ▶️", callback_data: `cty_${server}_${serviceCode}_${page+1}` })
+                if(page < maxPage) navRow.push({ text: "Next ▶️", callback_data: `cty|${server}|${serviceCode}|${page+1}` })
                 if(navRow.length > 0) inline_keyboard.push(navRow)
                 
                 inline_keyboard.push([
@@ -440,9 +442,9 @@ telegramRouter.post('/webhook', async (c) => {
             }
             
             // ==========================================
-            // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR & FAKE SPLIT (Rp +610 PER TINGKAT)
+            // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR & FAKE SPLIT
             // ==========================================
-            else if (data.startsWith('ct_')) {
+            else if (data.startsWith('ct|')) {
                 const parts = data.split('|')
                 const server = parts[1]
                 const serviceCode = parts[2]
@@ -461,7 +463,7 @@ telegramRouter.post('/webhook', async (c) => {
                     const serviceData = pricesObj[serviceCode]
 
                     if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
-                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${escapeHtml(srvName)}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
+                        await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${escapeHtml(srvName)}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv|${server}|${serviceCode}` }]] }, messageId)
                     } else {
                         const inline_keyboard = [];
                         
@@ -470,7 +472,7 @@ telegramRouter.post('/webhook', async (c) => {
                             const rawCost = Number(serviceData.cost ?? serviceData.price ?? 0);
                             const totalStock = serviceData.count ?? 0;
                             
-                            // 1. DIKALI KURS SEBELUM MARKUP
+                            // DIKALI KURS SEBELUM MARKUP
                             const costIDR = rawCost * exchangeRate;
                             const { finalPrice } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId);
 
@@ -490,7 +492,6 @@ telegramRouter.post('/webhook', async (c) => {
                                     
                                     const tieredPrice = finalPrice + ((4 - index) * 610);
                                     
-                                    // PENGGUNAAN PEMISAH GARIS VERTIKAL (|)
                                     inline_keyboard.push([{ 
                                         text: `${label} : Rp ${tieredPrice.toLocaleString('id-ID')} (${s})`, 
                                         callback_data: `buy|${server}|${serviceCode}|${countryId}|${tieredPrice}|any` 
@@ -511,7 +512,7 @@ telegramRouter.post('/webhook', async (c) => {
                                     const stock = (optData as any).count ?? 0
                                     const operatorName = String(op || 'any').toLowerCase()
                                     
-                                    // 1. DIKALI KURS SEBELUM MARKUP
+                                    // DIKALI KURS SEBELUM MARKUP
                                     const costIDR = rawCost * exchangeRate;
                                     const { finalPrice } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId)
                                     
@@ -521,7 +522,6 @@ telegramRouter.post('/webhook', async (c) => {
                                     }
                                     
                                     const opShort = operatorName.substring(0, 15);
-                                    // PENGGUNAAN PEMISAH GARIS VERTIKAL (|)
                                     row.push({ text: btnText, callback_data: `buy|${server}|${serviceCode}|${countryId}|${finalPrice}|${opShort}` })
                                     
                                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
@@ -530,16 +530,15 @@ telegramRouter.post('/webhook', async (c) => {
                             if(row.length > 0) inline_keyboard.push(row)
                         }
 
-                        inline_keyboard.push([{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }])
+                        inline_keyboard.push([{ text: "🔙 Kembali", callback_data: `sv|${server}|${serviceCode}` }])
 
                         await sendTelegramMessage(botToken, chatId, `✨ <b>LAYANAN TERPILIH: ${escapeHtml(srvName.toUpperCase())}</b>\n\nBerikut adalah pilihan harga yang tersedia saat ini untuk negara yang Anda pilih:\n\n<i>Pilih harga yang menurut Anda paling stabil:</i>`, { inline_keyboard }, messageId)
                     }
                 } catch (e: any) {
-                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${escapeHtml(e.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
+                    await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${escapeHtml(e.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv|${server}|${serviceCode}` }]] }, messageId)
                 }
             }
             else if (data.startsWith('buy|')) {
-                // PARSING CALLBACK MENGGUNAKAN PEMISAH GARIS VERTIKAL (|)
                 const parts = data.split('|')
                 const server = parts[1]
                 const serviceCode = parts[2]
@@ -555,7 +554,7 @@ telegramRouter.post('/webhook', async (c) => {
                     const nokos = new NokosService(nokosApiKey)
                     const order = await (nokos as any).getNumber(serviceCode, countryId, server, operator)
 
-                    // 1. DIKALI KURS SEBELUM MARKUP
+                    // DIKALI KURS SEBELUM MARKUP
                     const costIDR = Number(order.price) * exchangeRate;
                     const { markupApplied } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId)
 
@@ -572,7 +571,7 @@ telegramRouter.post('/webhook', async (c) => {
                         await c.env.DB.prepare(`UPDATE telegram_users SET balance = balance + (SELECT final_price FROM transactions WHERE transaction_id = ?) WHERE telegram_id = ?`).bind(trxId, String(chatId)).run() 
                         await c.env.DB.prepare(`UPDATE transactions SET status = 'failed' WHERE transaction_id = ?`).bind(trxId).run()
                     }
-                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${escapeHtml(error.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct_${server}_${serviceCode}_${countryId}` }]] }, messageId)
+                    await sendTelegramMessage(botToken, chatId, `❌ <b>GAGAL:</b> ${escapeHtml(error.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `ct|${server}|${serviceCode}|${countryId}` }]] }, messageId)
                 }
             }
         } catch (err: any) {
@@ -666,7 +665,8 @@ telegramRouter.post('/webhook', async (c) => {
 
             for (let i = 0; i < searchResults.results.length; i++) {
                 const srv = searchResults.results[i];
-                row.push({ text: srv.name, callback_data: `sv_s2_${srv.code}` });
+                // PEMISAH DIRUBAH KE |
+                row.push({ text: srv.name, callback_data: `sv|s2|${srv.code}` });
                 if (row.length === 2) { inline_keyboard.push(row); row = []; }
             }
             if (row.length > 0) inline_keyboard.push(row);
