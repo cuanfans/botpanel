@@ -5,7 +5,7 @@ import { NokosService } from '../services/nokos'
 
 export const telegramRouter = new Hono<{ Bindings: { DB: D1Database } }>()
 
-// Helper kirim pesan Telegram
+// Helper kirim pesan Telegram (Error tidak lagi ditelan)
 async function sendTelegramMessage(botToken: string, chatId: string | number, text: string, replyMarkup?: any, messageIdToEdit?: number, useHtml: boolean = true) {
     const url = messageIdToEdit 
         ? `https://api.telegram.org/bot${botToken}/editMessageText`
@@ -163,6 +163,9 @@ telegramRouter.post('/webhook', async (c) => {
     const promoChannel = (configs['promo_channel'] || '@InfoNokosMochi').trim()
     const contactCs = (configs['contact_cs'] || 'https://t.me/CSAnda').trim()
     const termsText = (configs['terms_conditions'] || 'Syarat dan ketentuan belum diatur.').trim()
+    
+    // VARIABEL KURS MATA UANG NOKOS -> IDR
+    const exchangeRate = Number(configs['nokos_exchange_rate'] || 17825)
     
     const reqUrl = new URL(c.req.url)
     const autoWebhookUrl = `${reqUrl.origin}/api/qris/webhook`
@@ -440,7 +443,7 @@ telegramRouter.post('/webhook', async (c) => {
             // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR & FAKE SPLIT (Rp +610 PER TINGKAT)
             // ==========================================
             else if (data.startsWith('ct_')) {
-                const parts = data.split('_')
+                const parts = data.split('|')
                 const server = parts[1]
                 const serviceCode = parts[2]
                 const countryId = parts[3]
@@ -466,10 +469,12 @@ telegramRouter.post('/webhook', async (c) => {
                             // JIKA DARI PUSAT HANYA 1 HARGA GLOBAL (ANY OPERATOR) -> LAKUKAN FAKE SPLIT
                             const rawCost = Number(serviceData.cost ?? serviceData.price ?? 0);
                             const totalStock = serviceData.count ?? 0;
-                            const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId);
+                            
+                            // 1. DIKALI KURS SEBELUM MARKUP
+                            const costIDR = rawCost * exchangeRate;
+                            const { finalPrice } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId);
 
                             if (totalStock >= 10) {
-                                // Pecah jadi 5 tombol dengan persentase menaik dan harga dinaikkan +610 ke atas
                                 const fakeLabels = ["👑 VIP SERVER", "💎 PREMIUM V1", "⚡ PREMIUM V2", "✨ REGULER V1", "🌟 REGULER V2"];
                                 const stockShares = [0.04, 0.07, 0.19, 0.30]; 
                                 let remainingStock = totalStock;
@@ -480,25 +485,21 @@ telegramRouter.post('/webhook', async (c) => {
                                         s = Math.max(1, Math.floor(totalStock * stockShares[index]));
                                         remainingStock -= s;
                                     } else {
-                                        s = remainingStock; // Sisa stok untuk tombol terbawah
+                                        s = remainingStock; 
                                     }
                                     
-                                    // Harga paling bawah (Reguler V2) adalah harga normal.
-                                    // Semakin ke atas, harganya ditambah kelipatan 610.
                                     const tieredPrice = finalPrice + ((4 - index) * 610);
                                     
-                                    // Semua tombol mengirim param 'any' agar backend memprosesnya sebagai order normal
-                                    // Harga tieredPrice dimasukkan ke callback_data agar saldo terpotong sesuai yang diklik
+                                    // PENGGUNAAN PEMISAH GARIS VERTIKAL (|)
                                     inline_keyboard.push([{ 
                                         text: `${label} : Rp ${tieredPrice.toLocaleString('id-ID')} (${s})`, 
-                                        callback_data: `buy_${server}_${serviceCode}_${countryId}_${tieredPrice}_any` 
+                                        callback_data: `buy|${server}|${serviceCode}|${countryId}|${tieredPrice}|any` 
                                     }]);
                                 });
                             } else {
-                                // Jika stok terlalu sedikit (<10), jangan dipecah
                                 inline_keyboard.push([{ 
                                     text: `SERVER OTOMATIS : Rp ${finalPrice.toLocaleString('id-ID')} (${totalStock})`, 
-                                    callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}_any` 
+                                    callback_data: `buy|${server}|${serviceCode}|${countryId}|${finalPrice}|any` 
                                 }]);
                             }
                         } else {
@@ -510,7 +511,9 @@ telegramRouter.post('/webhook', async (c) => {
                                     const stock = (optData as any).count ?? 0
                                     const operatorName = String(op || 'any').toLowerCase()
                                     
-                                    const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId)
+                                    // 1. DIKALI KURS SEBELUM MARKUP
+                                    const costIDR = rawCost * exchangeRate;
+                                    const { finalPrice } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId)
                                     
                                     let btnText = `Rp ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`
                                     if (operatorName !== 'any' && operatorName !== 'random' && isNaN(Number(operatorName))) {
@@ -518,7 +521,8 @@ telegramRouter.post('/webhook', async (c) => {
                                     }
                                     
                                     const opShort = operatorName.substring(0, 15);
-                                    row.push({ text: btnText, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}_${opShort}` })
+                                    // PENGGUNAAN PEMISAH GARIS VERTIKAL (|)
+                                    row.push({ text: btnText, callback_data: `buy|${server}|${serviceCode}|${countryId}|${finalPrice}|${opShort}` })
                                     
                                     if(row.length === 2) { inline_keyboard.push(row); row = []; }
                                 }
@@ -534,12 +538,12 @@ telegramRouter.post('/webhook', async (c) => {
                     await sendTelegramMessage(botToken, chatId, `❌ Gagal mengambil harga: ${escapeHtml(e.message)}`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                 }
             }
-            else if (data.startsWith('buy_')) {
-                const parts = data.split('_')
+            else if (data.startsWith('buy|')) {
+                // PARSING CALLBACK MENGGUNAKAN PEMISAH GARIS VERTIKAL (|)
+                const parts = data.split('|')
                 const server = parts[1]
                 const serviceCode = parts[2]
                 const countryId = parts[3]
-                // HARGA YANG DITERIMA BERDASARKAN TOMBOL TINGKATAN YANG DIKLIK USER
                 const expectedPrice = Number(parts[4])
                 const operator = parts[5] || 'any'
                 const trxId = `TRX-${Date.now()}`
@@ -549,23 +553,22 @@ telegramRouter.post('/webhook', async (c) => {
                     await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${escapeHtml(serviceCode.toUpperCase())}</b>\nOperator: <b>${escapeHtml(operator.toUpperCase())}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
 
                     const nokos = new NokosService(nokosApiKey)
-                    // Operator dikirim utuh ke provider ('any' akan diproses secara global)
                     const order = await (nokos as any).getNumber(serviceCode, countryId, server, operator)
 
-                    const { markupApplied } = await calculateFinalPrice(c.env.DB, order.price, serviceCode, countryId)
+                    // 1. DIKALI KURS SEBELUM MARKUP
+                    const costIDR = Number(order.price) * exchangeRate;
+                    const { markupApplied } = await calculateFinalPrice(c.env.DB, costIDR, serviceCode, countryId)
 
-                    // Sistem Atomic kita akan mencatat expectedPrice sebagai final_price transaksi
                     await c.env.DB.prepare(`
                         UPDATE transactions 
                         SET status = 'success', nokos_activation_id = ?, phone_number = ?, provider_cost = ?, markup_applied = ?, updated_at = CURRENT_TIMESTAMP
                         WHERE transaction_id = ?
-                    `).bind(order.activation_id, order.phone, order.price, markupApplied, trxId).run()
+                    `).bind(order.activation_id, order.phone, costIDR, markupApplied, trxId).run()
 
                     await sendTelegramMessage(botToken, chatId, `✅ <b>SUKSES!</b>\n\n📱 Nomor Anda: <code>${escapeHtml(order.phone)}</code>\n🔖 ID Aktivasi: ${escapeHtml(order.activation_id)}\n\n<i>Ketik <code>/otp ${escapeHtml(order.activation_id)}</code> untuk mengecek SMS yang masuk.</i>`, undefined, messageId)
 
                 } catch (error: any) {
                     if (error.message !== "Saldo tidak mencukupi atau transaksi gagal") {
-                        // JIKA GAGAL, SISTEM REFUND AKAN MENGEMBALIKAN SALDO SESUAI DENGAN HARGA TINGKATAN (expectedPrice) YANG TERCATAT
                         await c.env.DB.prepare(`UPDATE telegram_users SET balance = balance + (SELECT final_price FROM transactions WHERE transaction_id = ?) WHERE telegram_id = ?`).bind(trxId, String(chatId)).run() 
                         await c.env.DB.prepare(`UPDATE transactions SET status = 'failed' WHERE transaction_id = ?`).bind(trxId).run()
                     }
