@@ -5,7 +5,7 @@ import { NokosService } from '../services/nokos'
 
 export const telegramRouter = new Hono<{ Bindings: { DB: D1Database } }>()
 
-// Helper kirim pesan Telegram (Error tidak lagi ditelan)
+// Helper kirim pesan Telegram
 async function sendTelegramMessage(botToken: string, chatId: string | number, text: string, replyMarkup?: any, messageIdToEdit?: number, useHtml: boolean = true) {
     const url = messageIdToEdit 
         ? `https://api.telegram.org/bot${botToken}/editMessageText`
@@ -51,7 +51,7 @@ function escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Helper Pembersih URL (Anti Bot Crash)
+// Helper Pembersih URL
 function sanitizeUrl(url: string): string {
     let safeUrl = url.trim();
     if (safeUrl.startsWith('@')) return `https://t.me/${safeUrl.substring(1)}`;
@@ -435,8 +435,9 @@ telegramRouter.post('/webhook', async (c) => {
                 const ctyText = `✨ <b>PILIH NEGARA: ${escapeHtml(srvName.toUpperCase())}</b> (Hal. ${page})\n\nMenampilkan ${totalCty?.t || 0} negara yang memiliki stok ketersediaan saat ini:\n\n<i>Pilih negara tujuan Anda:</i>`
                 await sendTelegramMessage(botToken, chatId, ctyText, { inline_keyboard }, messageId)
             }
+            
             // ==========================================
-            // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR
+            // LOGIKA PEMBAGIAN HARGA BERDASARKAN OPERATOR & FAKE SPLIT (Rp +610 PER TINGKAT)
             // ==========================================
             else if (data.startsWith('ct_')) {
                 const parts = data.split('_')
@@ -459,36 +460,71 @@ telegramRouter.post('/webhook', async (c) => {
                     if (!serviceData || (serviceData.count !== undefined && serviceData.count <= 0)) {
                         await sendTelegramMessage(botToken, chatId, `❌ Maaf, stok untuk <b>${escapeHtml(srvName)}</b> di negara ini sedang kosong.`, { inline_keyboard: [[{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }]] }, messageId)
                     } else {
-                        let priceOptions = []
+                        const inline_keyboard = [];
+                        
                         if (serviceData.cost !== undefined || serviceData.price !== undefined) {
-                            priceOptions.push(serviceData)
+                            // JIKA DARI PUSAT HANYA 1 HARGA GLOBAL (ANY OPERATOR) -> LAKUKAN FAKE SPLIT
+                            const rawCost = Number(serviceData.cost ?? serviceData.price ?? 0);
+                            const totalStock = serviceData.count ?? 0;
+                            const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId);
+
+                            if (totalStock >= 10) {
+                                // Pecah jadi 5 tombol dengan persentase menaik dan harga dinaikkan +610 ke atas
+                                const fakeLabels = ["👑 VIP SERVER", "💎 PREMIUM V1", "⚡ PREMIUM V2", "✨ REGULER V1", "🌟 REGULER V2"];
+                                const stockShares = [0.04, 0.07, 0.19, 0.30]; 
+                                let remainingStock = totalStock;
+
+                                fakeLabels.forEach((label, index) => {
+                                    let s = 0;
+                                    if (index < 4) {
+                                        s = Math.max(1, Math.floor(totalStock * stockShares[index]));
+                                        remainingStock -= s;
+                                    } else {
+                                        s = remainingStock; // Sisa stok untuk tombol terbawah
+                                    }
+                                    
+                                    // Harga paling bawah (Reguler V2) adalah harga normal.
+                                    // Semakin ke atas, harganya ditambah kelipatan 610.
+                                    const tieredPrice = finalPrice + ((4 - index) * 610);
+                                    
+                                    // Semua tombol mengirim param 'any' agar backend memprosesnya sebagai order normal
+                                    // Harga tieredPrice dimasukkan ke callback_data agar saldo terpotong sesuai yang diklik
+                                    inline_keyboard.push([{ 
+                                        text: `${label} : Rp ${tieredPrice.toLocaleString('id-ID')} (${s})`, 
+                                        callback_data: `buy_${server}_${serviceCode}_${countryId}_${tieredPrice}_any` 
+                                    }]);
+                                });
+                            } else {
+                                // Jika stok terlalu sedikit (<10), jangan dipecah
+                                inline_keyboard.push([{ 
+                                    text: `SERVER OTOMATIS : Rp ${finalPrice.toLocaleString('id-ID')} (${totalStock})`, 
+                                    callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}_any` 
+                                }]);
+                            }
                         } else {
+                            // JIKA DARI PUSAT MEMANG TERDAPAT BANYAK OPERATOR ASLI (Real Data)
+                            let row = [];
                             for (const [op, optData] of Object.entries(serviceData)) {
                                 if ((optData as any).cost !== undefined || (optData as any).price !== undefined) {
-                                    priceOptions.push({ ...optData as any, operator: op })
+                                    const rawCost = Number((optData as any).cost ?? (optData as any).price ?? 0)
+                                    const stock = (optData as any).count ?? 0
+                                    const operatorName = String(op || 'any').toLowerCase()
+                                    
+                                    const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId)
+                                    
+                                    let btnText = `Rp ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`
+                                    if (operatorName !== 'any' && operatorName !== 'random' && isNaN(Number(operatorName))) {
+                                        btnText = `${operatorName.toUpperCase()} : Rp ${finalPrice.toLocaleString('id-ID')} (${stock})`
+                                    }
+                                    
+                                    const opShort = operatorName.substring(0, 15);
+                                    row.push({ text: btnText, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}_${opShort}` })
+                                    
+                                    if(row.length === 2) { inline_keyboard.push(row); row = []; }
                                 }
                             }
+                            if(row.length > 0) inline_keyboard.push(row)
                         }
-
-                        const inline_keyboard = []
-                        let row = []
-
-                        for (const opt of priceOptions) {
-                            const rawCost = Number(opt.cost ?? opt.price ?? 0)
-                            const stock = opt.count ?? 0
-                            
-                            const { finalPrice } = await calculateFinalPrice(c.env.DB, rawCost, serviceCode, countryId)
-                            
-                            // FORMAT TOMBOL: TAMPILKAN NAMA OPERATOR AGAR BISA MEMBEDAKAN 10+ HARGA
-                            let btnText = `Rp ${finalPrice.toLocaleString('id-ID')} | Stok ${stock}`
-                            if (opt.operator && opt.operator.toLowerCase() !== 'any' && opt.operator.toLowerCase() !== 'random') {
-                                btnText = `${opt.operator.toUpperCase()} : Rp ${finalPrice.toLocaleString('id-ID')} (${stock})`
-                            }
-                            
-                            row.push({ text: btnText, callback_data: `buy_${server}_${serviceCode}_${countryId}_${finalPrice}` })
-                            if(row.length === 2) { inline_keyboard.push(row); row = []; }
-                        }
-                        if(row.length > 0) inline_keyboard.push(row)
 
                         inline_keyboard.push([{ text: "🔙 Kembali", callback_data: `sv_${server}_${serviceCode}` }])
 
@@ -503,18 +539,22 @@ telegramRouter.post('/webhook', async (c) => {
                 const server = parts[1]
                 const serviceCode = parts[2]
                 const countryId = parts[3]
+                // HARGA YANG DITERIMA BERDASARKAN TOMBOL TINGKATAN YANG DIKLIK USER
                 const expectedPrice = Number(parts[4])
+                const operator = parts[5] || 'any'
                 const trxId = `TRX-${Date.now()}`
 
                 try {
                     await atomicPurchase(c.env.DB, String(chatId), expectedPrice, serviceCode, countryId, trxId)
-                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${escapeHtml(serviceCode.toUpperCase())}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
+                    await sendTelegramMessage(botToken, chatId, `⏳ Memproses pesanan...\nLayanan: <b>${escapeHtml(serviceCode.toUpperCase())}</b>\nOperator: <b>${escapeHtml(operator.toUpperCase())}</b>\nSaldo dipotong: Rp ${expectedPrice.toLocaleString('id-ID')}`, undefined, messageId)
 
                     const nokos = new NokosService(nokosApiKey)
-                    const order = await nokos.getNumber(serviceCode, countryId, server)
+                    // Operator dikirim utuh ke provider ('any' akan diproses secara global)
+                    const order = await (nokos as any).getNumber(serviceCode, countryId, server, operator)
 
                     const { markupApplied } = await calculateFinalPrice(c.env.DB, order.price, serviceCode, countryId)
 
+                    // Sistem Atomic kita akan mencatat expectedPrice sebagai final_price transaksi
                     await c.env.DB.prepare(`
                         UPDATE transactions 
                         SET status = 'success', nokos_activation_id = ?, phone_number = ?, provider_cost = ?, markup_applied = ?, updated_at = CURRENT_TIMESTAMP
@@ -525,6 +565,7 @@ telegramRouter.post('/webhook', async (c) => {
 
                 } catch (error: any) {
                     if (error.message !== "Saldo tidak mencukupi atau transaksi gagal") {
+                        // JIKA GAGAL, SISTEM REFUND AKAN MENGEMBALIKAN SALDO SESUAI DENGAN HARGA TINGKATAN (expectedPrice) YANG TERCATAT
                         await c.env.DB.prepare(`UPDATE telegram_users SET balance = balance + (SELECT final_price FROM transactions WHERE transaction_id = ?) WHERE telegram_id = ?`).bind(trxId, String(chatId)).run() 
                         await c.env.DB.prepare(`UPDATE transactions SET status = 'failed' WHERE transaction_id = ?`).bind(trxId).run()
                     }
